@@ -5,8 +5,20 @@ import os
 # required for exit value
 import sys
 
+# needed for API request
+import requests
 
-API_ENDPOINT = "https://dnsapi.netplanet.at/api"
+import json
+# make json readable
+from pprint import pprint
+
+# Libs:
+# https://pypi.org/project/python-powerdns/
+# import powerdns
+
+# https://doc.powerdns.com/authoritative/http-api/zone.html
+
+API_ENDPOINT_BASE = "https://dnsapi.netplanet.at/api"
 API_KEY_LOCATION = "/etc/hamip/key.asc"
 
 
@@ -45,3 +57,24 @@ if api_key is None:
     print(f"Error: Key not found at", API_KEY_LOCATION, "or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
 print(api_key)
+
+# Make a request to the API
+headers = {
+    'X-API-Key': api_key
+}
+
+API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
+
+response = requests.get(API_ENDPOINT, headers=headers)
+
+# print raw response
+# print(response.text)
+
+# make response more readable
+try:
+    response_json = response.json()
+    pprint(response_json)
+except json.JSONDecodeError as e:
+    print("Failed to decode JSON response")
+    print(response.text)
+
