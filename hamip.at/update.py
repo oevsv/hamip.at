@@ -7,7 +7,7 @@ import sys
 
 
 API_ENDPOINT = "https://dnsapi.netplanet.at/api"
-API_KEY_LOCATION = "/etc/hamip/key.ascx"
+API_KEY_LOCATION = "/etc/hamip/key.asc"
 
 
 # import authkey from /etc/hamip/key.asc
