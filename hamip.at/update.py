@@ -15,6 +15,9 @@ from pprint import pprint
 # to generate debugging/testing data
 import random
 
+# to parse IPs
+import ipaddress
+
 # Libs:
 # https://pypi.org/project/python-powerdns/
 # import powerdns
@@ -77,6 +80,158 @@ def print_response(response):
     except json.JSONDecodeError as e:
         print("Failed to decode JSON response")
         print(response.text)
+
+
+
+
+
+def get_hamnetdb_dhcp(dhcp_dict):
+    # Endpoint for HamnetDB
+    HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=subnet&json=1"
+
+    # {
+    #     "edited": "2021-06-06 16:10:23",
+    #     "id": 6041,
+    #     "ip": "44.143.53.32/28",
+    #     "deleted": 0,
+    #     "maintainer": "",
+    #     "editor": "oe3dzw",
+    #     "as_num": 0,
+    #     "rw_maint": 0,
+    #     "typ": "User-Network",
+    #     "version": 3,
+    #     "end_ip": 747582768,
+    #     "as_parent": 4223230011,
+    #     "dhcp_range": "35-46",
+    #     "begin_ip": 747582752,
+    #     "radioparam": "2422MHz@10MHz BW Omni",
+    #     "no_check": 0,
+    #     "comment": ""
+    # },
+
+
+    try:
+        response = requests.get(HAMNETDB_ENDPOINT)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data from HamnetDB: {e}")
+        return
+
+    try:
+        data = response.json()
+        print("HamnetDB-size:", len(data))
+
+        # Iterate over each subnet entry
+        for entry in data:
+            # Skip deleted entries
+            if entry.get("deleted") != 0:
+                continue
+
+            # Convert begin_ip to an IPv4 address
+            base_ip = str(ipaddress.IPv4Address(entry['begin_ip']))
+
+            # Parse the dhcp_range
+            dhcp_range = entry.get('dhcp_range', '')
+            if not dhcp_range:
+                continue
+
+            range_start, range_end = map(int, dhcp_range.split('-'))
+
+            # Generate the dictionary entries
+            for i in range(range_start, range_end + 1):
+                octets = base_ip.split('.')
+                octets[3] = str(i)  # Replace the last octet with each number in the range
+                new_ip = '.'.join(octets)
+                # dhcp-44-143-60-39.oe3xnr
+                dhcp_dict[f"dhcp-{new_ip.replace('.', '-')}.{name}"] = new_ip
+
+    except (json.JSONDecodeError, ValueError) as e:
+        print("Failed to decode JSON data or parse ranges:", e)
+
+    # Print the resulting dictionary
+    print(dhcp_dict)
+
+
+# Usage example
+dhcp_dict = {}
+get_hamnetdb_dhcp(dhcp_dict)
+def get_hamnetdb_hosts(name_ip_dict, aliases_cname_dict):
+    # Endpoint for HamnetDB
+    HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
+
+    # Example response:
+    # {
+    #     "ip": "44.143.60.66",
+    #     "edited": "2023-05-13 09:55:56",
+    #     "comment": "Main web server OE3XNR, iGate APRS 144.800 MHz",
+    #     "routing": 0,
+    #     "monitor": 1,
+    #     "mac": "",
+    #     "radioparam": "",
+    #     "no_ping": 0,
+    #     "rawip": 747584578,
+    #     "site": "oe3xnr",
+    #     "id": 14448,
+    #     "aliases": "www.oe3xnr,aprs.oe3xnr,index.oe3xnr,web.oe3xzr,admin.oe3xnr,shack.oe3xnr,aprs.oe3xnr,cam.oe3xnr,cam.oe3xhr,search.oe3xnr,file.oe3xnr,search.oe3xnr",
+    #     "maintainer": "",
+    #     "rw_maint": 0,
+    #     "name": "web.oe3xnr",
+    #     "typ": "Service",
+    #     "version": 16,
+    #     "editor": "oe3dzw",
+    #     "deleted": 0
+    # },
+
+    try:
+        response = requests.get(HAMNETDB_ENDPOINT)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data from HamnetDB: {e}")
+        return
+
+    try:
+        entries = response.json()
+        print("HamnetDB-size:", len(entries))
+
+        # Iterate over each entry
+        for entry in entries:
+            site = entry.get("site")
+            name = entry.get("name")
+            ip = entry.get("ip")
+            deleted = entry.get("deleted")
+            if deleted == 0 and site.startswith("oe"):
+                # Add name and IP to name_ip_dict
+
+                if name and ip:
+                    name_ip_dict[name] = ip
+
+                # Add aliases and IP to aliases_ip_dict
+                aliases = entry.get("aliases", "")
+                if aliases:
+                    for alias in aliases.split(','):
+                        if alias.strip() != name:
+                            aliases_cname_dict[alias.strip()] = name
+
+        # Show the results
+        print(f"Name and IP Dictionary: {len(name_ip_dict)}")
+        # print(json.dumps(name_ip_dict, indent=2))
+
+        print(f"Aliases and IP Dictionary: {len(aliases_cname_dict)}")
+        # print(json.dumps(aliases_ip_dict, indent=2))
+
+    except json.JSONDecodeError:
+        print("Failed to decode JSON data")
+
+
+# Initialize dictionaries
+name_ip_dict = {}
+aliases_cname_dict = {}
+# get_hamnetdb_hosts(name_ip_dict,aliases_cname_dict)
+
+dhcp_dict = {}
+get_hamnetdb_dhcp(dhcp_dict)
+
+exit(0)
 
 api_key = read_auth_key(API_KEY_LOCATION)
 if api_key is None:
@@ -178,7 +333,7 @@ for name, ip_address in rrsets_dict_on_server.items():
 
 print(f"Filtered rrsets size: {len(filtered_rrsets_dict)}")
 
-if len(filtered_rrsets_dict) == 0:
+if False and len(filtered_rrsets_dict) == 0:
     print("No RRsets starting with 'test' found.")
     exit(-1)
 
@@ -191,6 +346,40 @@ rrsets = [
     }
     for name, ip in filtered_rrsets_dict.items()
 ]
+
+
+rrsets_part_name = [
+    {
+        "name": f"{name}.hamip.at.",
+        "type": "A",
+        "ttl": 3600,
+        "changetype": "REPLACE",
+        "records": [
+            {
+                "content": ip,
+                "disabled": False
+            }
+        ]
+    }
+    for name, ip in name_ip_dict.items()
+]
+
+rrsets = [
+    {
+        "name": f"{name}.hamip.at.",
+        "type": "CNAME",
+        "ttl": 3600,
+        "changetype": "REPLACE",
+        "records": [
+            {
+                "content": f"{cname}.hamip.at.",
+                "disabled": False
+            }
+        ]
+    }
+    for name, cname in aliases_cname_dict.items()
+]
+
 
 
 # Create the payload
