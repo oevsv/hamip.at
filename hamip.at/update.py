@@ -1,14 +1,13 @@
 #!/usr/bin/python3
 
-
 # required to read files
 import os
 # required for exit value
 import sys
 
 
-API_ENDPOINT="https://dnsapi.netplanet.at/api"
-API_KEY_LOCATION="/etc/hamip/key.ascx"
+API_ENDPOINT = "https://dnsapi.netplanet.at/api"
+API_KEY_LOCATION = "/etc/hamip/key.ascx"
 
 
 # import authkey from /etc/hamip/key.asc
@@ -23,7 +22,7 @@ def read_auth_key(file_path):
     try:
         # Check if the file exists and is readable
         if not os.path.isfile(file_path):
-            print("debug, file does not exist");
+            print("debug, file does not exist")
             return None
 
         # Open the file and read its contents
@@ -41,8 +40,8 @@ def read_auth_key(file_path):
         return None
 
 
-api_key=read_auth_key(API_KEY_LOCATION);
-if (api_key is None):
-    print(f"Error: Key not found at",API_KEY_LOCATION,"or could not be read.")
+api_key = read_auth_key(API_KEY_LOCATION)
+if api_key is None:
+    print(f"Error: Key not found at", API_KEY_LOCATION, "or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
-print(api_key);
+print(api_key)
