@@ -12,6 +12,9 @@ import json
 # make json readable
 from pprint import pprint
 
+# to generate debugging/testing data
+import random
+
 # Libs:
 # https://pypi.org/project/python-powerdns/
 # import powerdns
@@ -52,29 +55,156 @@ def read_auth_key(file_path):
         return None
 
 
+# Function to generate random domains including a random 32-digit number
+def generate_random_subdomain():
+    return f"test{random.randint(10**31, 10**32 - 1)}.hamip.at"
+
+# Function to generate a random IP address in the 192.168.x.x range
+def generate_random_ip():
+    return f"192.168.{random.randint(0, 255)}.{random.randint(0, 255)}"
+
+# Create the rrset_dict with n random entries
+rrset_dict = {
+    generate_random_subdomain(): generate_random_ip()
+    for _ in range(1)
+}
+
+def print_response(response):
+    # make response more readable
+    try:
+        response_json = response.json()
+        pprint(response_json)
+    except json.JSONDecodeError as e:
+        print("Failed to decode JSON response")
+        print(response.text)
+
 api_key = read_auth_key(API_KEY_LOCATION)
 if api_key is None:
     print(f"Error: Key not found at", API_KEY_LOCATION, "or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
-print(api_key)
+# print(api_key)
 
-# Make a request to the API
+# put the key into a request header
 headers = {
     'X-API-Key': api_key
 }
 
-API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
-
-response = requests.get(API_ENDPOINT, headers=headers)
-
-# print raw response
-# print(response.text)
-
-# make response more readable
+# Check if the server is alive
 try:
+    API_ENDPOINT: str = API_ENDPOINT_BASE + "/v1/servers/localhost/zones"
+    response = requests.get(API_ENDPOINT, headers=headers)
     response_json = response.json()
-    pprint(response_json)
-except json.JSONDecodeError as e:
+
+    # Access the key '2504' and check if the 'url' key matches the expected value
+    key_to_check = '2504'
+    expected_url = '/api/v1/servers/localhost/zones/hamip.at.'
+
+    if key_to_check in response_json:
+        actual_url = response_json[key_to_check].get('url')
+
+        if actual_url != expected_url:
+            print(f"The 'url' key does not match. Found: {actual_url}")
+    else:
+        print(f"Key '{key_to_check}' not found in the response")
+
+except json.JSONDecodeError:
     print("Failed to decode JSON response")
     print(response.text)
+
+
+# request to load data into rrset and get serial
+
+# getupdated zone
+response = requests.get(API_ENDPOINT, headers=headers)
+
+
+# Parse the JSON data
+data = response.json()
+zone_data = data.get('2504', {})
+
+# Retrieve the serial number
+serial = zone_data.get('serial', None)
+
+print(f"Current serial: {serial}")
+
+if serial == None:
+    print("None,failed")
+    print_response(response)
+    exit(-1)
+
+# Retrieve only the relevant information from rrsets
+rrsets_dict_on_server = {}
+for rrset in data.get('rrsets', []):
+    name = rrset.get('name')
+    for record in rrset.get('records', []):
+        # Only include 'A' type records
+        if rrset.get('type') == 'A':
+            ip_address = record.get('content')
+            rrsets_dict_on_server[name] = ip_address
+
+# rsets_dict_on_server is currently not used, but should be compared against the local version, patching those entries
+# which have changed.
+
+# repare the submission of the new rr_sets (based on random data)
+
+# Create the rrset_dict with 100 random entries
+rrset_dict = {
+    generate_random_subdomain(): generate_random_ip()
+    for _ in range(100)
+}
+
+# Retrieve only the relevant information from rrsets
+rrsets_dict = {}
+for rrset in data.get('rrsets', []):
+    name = rrset.get('name')
+    for record in rrset.get('records', []):
+        # Only include 'A' type records
+        if rrset.get('type') == 'A':
+            ip_address = record.get('content')
+            rrsets_dict[name] = ip_address
+
+# Convert the dictionary into the RRset JSON structure
+rrsets = [
+    {
+        "name": f"{name}.",
+        "type": "A",
+        "ttl": 3600,
+        "changetype": "REPLACE",
+        "records": [
+            {
+                "content": ip,
+                "disabled": False
+            }
+        ]
+    }
+    for name, ip in rrset_dict.items()
+]
+
+
+# Create the payload
+rrset_payload = {
+    "rrsets": rrsets
+}
+
+# update header, here we need to specify the content type
+headers = {
+    'X-API-Key': api_key,
+    'Content-Type': 'application/json'
+}
+
+API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
+response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_payload))
+
+
+# Check the response
+if response.status_code == 204:
+    print("RRsets added successfully.")
+else:
+    print(f"Failed to add RRsets. Status code: {response.status_code}")
+    print("Response:", response.text)
+
+
+# getupdated zone
+response = requests.get(API_ENDPOINT, headers=headers)
+print_response(response)
 
