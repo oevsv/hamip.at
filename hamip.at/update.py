@@ -18,10 +18,6 @@ import random
 # to parse IPs
 import ipaddress
 
-# Libs:
-# https://pypi.org/project/python-powerdns/
-# import powerdns
-
 # https://doc.powerdns.com/authoritative/http-api/zone.html
 
 API_ENDPOINT_BASE = "https://dnsapi.netplanet.at/api"
@@ -81,9 +77,15 @@ def print_response(response):
         print("Failed to decode JSON response")
         print(response.text)
 
-
-
-
+def request_patch(endpoint,headers,payload,status_code):
+    response = requests.patch(endpoint, headers=headers, data=json.dumps(payload))
+    # Check the response
+    if response.status_code != status_code:
+       print(f"Failed to patch. Status code: {response.status_code}")
+       print("Response:", response.text)
+       print("Payload:", payload)
+       exit(1)
+    return response
 
 def get_hamnetdb_dhcp(dhcp_dict):
     # Endpoint for HamnetDB
@@ -456,68 +458,30 @@ headers = {
 }
 
 API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
+request_patch(API_ENDPOINT,headers,rrset_remove_payload,204)
+request_patch(API_ENDPOINT,headers,rrset_change_A_payload,204)
+request_patch(API_ENDPOINT,headers,rrset_change_CNAME_payload,204)
 
-response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_remove_payload))
+UPDATE_SERIAL = False
 
-# Check the response
-if response.status_code == 204:
-    print("RRsets patched/deleted successfully.")
-else:
-   print(f"1Failed to patch/delete RRsets. Status code: {response.status_code}")
-   print("Response:", response.text)
-   print("Payload:", rrset_remove_payload)
-   exit(-1)
-
-response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_change_A_payload))
-
-# Check the response
-if response.status_code == 204:
-    print("RRsets patched/deleted successfully.")
-else:
-   print(f"2Failed to patch/delete RRsets. Status code: {response.status_code}")
-   print("Response:", response.text)
-   print("Payload:", rrset_change_A_payload)
-   exit(-1)
-
-response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_change_CNAME_payload))
-
-# Check the response
-if response.status_code == 204:
-    print("RRsets patched/deleted successfully.")
-else:
-   print(f"3Failed to patch/delete RRsets. Status code: {response.status_code}")
-   print("Response:", response.text)
-   print("Payload:", rrset_change_CNAME_payload)
-   exit(-1)
-
-
-# Update serial
-
-# Set SOA-EDIT to INCREASE
-alternative_payload = {
-        "name": "hamip.at.",
+if UPDATE_SERIAL:
+    # Update serial
+    payload = {
         "soa_edit_api": "INCREASE",
-        "kind": "Native"
-
+        "kind": "Native",
+        "soa_edit": "INCREASE"
     }
 
-payload = {
-    "soa_edit_api": "INCREASE",
-    "kind": "Native",
-    "soa_edit": "INCREASE"
-}
+    API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
+    response = requests.put(API_ENDPOINT, headers=headers, data=json.dumps(payload))
 
+    # Check the response status
+    if response.status_code == 204:
+        print("Zone updated successfully.")
+    else:
+        print(f"Failed to update zone. Status code: {response.status_code}")
+        print("Response:", response.text)
 
-API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
-response = requests.put(API_ENDPOINT, headers=headers, data=json.dumps(payload))
-
-# Check the response status
-if response.status_code == 204:
-    print("Zone updated successfully.")
-else:
-    print(f"Failed to update zone. Status code: {response.status_code}")
-    print("Response:", response.text)
-
-# getupdated zone
-response = requests.get(API_ENDPOINT, headers=headers)
-print_response(response)
+    # getupdated zone
+    response = requests.get(API_ENDPOINT, headers=headers)
+    print_response(response)
