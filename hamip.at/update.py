@@ -69,7 +69,7 @@ def generate_random_ip():
 # Create the rrset_dict with n random entries
 rrset_dict = {
     generate_random_subdomain(): generate_random_ip()
-    for _ in range(1)
+    for _ in range(10)
 }
 
 def print_response(response):
@@ -137,24 +137,45 @@ def get_hamnetdb_dhcp(dhcp_dict):
 
             range_start, range_end = map(int, dhcp_range.split('-'))
 
+            # dhcp-44-143-60-39.oe3xnr - implied by consistency check of
+            # Hamnetdb "Site-Network is empty (no host address found)"
+
+            # TODO: find first host, use that host as hostname for the dhcp-range (assume match)
+
+            # Convert the CIDR to an IP network and compile the list of IPs
+            all_ips = []
+            cidr = entry.get('ip', '')
+            print(cidr)
+            if cidr:
+                try:
+                    network = ipaddress.ip_network(cidr, strict=False)
+                    ips = [str(ip) for ip in network.hosts()]
+                    all_ips.extend(ips)
+                except ValueError as e:
+                    print(f"Error processing CIDR {cidr}: {e}")
+                    continue
+
+            print(all_ips)
+
+            # TODO: Now lookup hosts to find the name of the site
+            # TODO: Filter by oe-hosts
+
             # Generate the dictionary entries
             for i in range(range_start, range_end + 1):
                 octets = base_ip.split('.')
                 octets[3] = str(i)  # Replace the last octet with each number in the range
                 new_ip = '.'.join(octets)
-                # dhcp-44-143-60-39.oe3xnr
+
+                name = "todo"
                 dhcp_dict[f"dhcp-{new_ip.replace('.', '-')}.{name}"] = new_ip
 
     except (json.JSONDecodeError, ValueError) as e:
         print("Failed to decode JSON data or parse ranges:", e)
 
     # Print the resulting dictionary
-    print(dhcp_dict)
+    # print(dhcp_dict)
 
 
-# Usage example
-dhcp_dict = {}
-get_hamnetdb_dhcp(dhcp_dict)
 def get_hamnetdb_hosts(name_ip_dict, aliases_cname_dict):
     # Endpoint for HamnetDB
     HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
@@ -224,14 +245,14 @@ def get_hamnetdb_hosts(name_ip_dict, aliases_cname_dict):
 
 
 # Initialize dictionaries
-name_ip_dict = {}
-aliases_cname_dict = {}
-# get_hamnetdb_hosts(name_ip_dict,aliases_cname_dict)
+hamnetdb_dict_name_ip = {}
+hamnetdb_dict_aliases_cname = {}
+get_hamnetdb_hosts(hamnetdb_dict_name_ip,hamnetdb_dict_aliases_cname)
 
 dhcp_dict = {}
-get_hamnetdb_dhcp(dhcp_dict)
+# get_hamnetdb_dhcp(dhcp_dict)
 
-exit(0)
+
 
 api_key = read_auth_key(API_KEY_LOCATION)
 if api_key is None:
@@ -314,10 +335,14 @@ rrsets_dict_on_server = {}
 for rrset in data.get('rrsets', []):
     name = rrset.get('name')
     for record in rrset.get('records', []):
-        # Only include 'A' type records
+        # Include 'A' type records
         if rrset.get('type') == 'A':
             ip_address = record.get('content')
             rrsets_dict_on_server[name] = ip_address
+        # Include 'CNAME' type records
+        if rrset.get('type') == 'CNAME':
+            cname = record.get('content')
+            rrsets_dict_on_server[name] = cname
 
 print(f"Rrsets on server: {len(rrsets_dict_on_server)}")
 
@@ -325,30 +350,58 @@ if len(rrsets_dict_on_server)==0:
     print("failed to get rr_sets from server")
     exit(-1)
 
-# Filtering the rrsets based on "test" prefix
-filtered_rrsets_dict = {}
-for name, ip_address in rrsets_dict_on_server.items():
-    if name.startswith("test"):
-        filtered_rrsets_dict[name] = ip_address
+# compare hamnetdb_dict_name_ip and hamnetdb_dict_aliases_cname with rrsets_dict_on_server
 
-print(f"Filtered rrsets size: {len(filtered_rrsets_dict)}")
+# Dictionaries to hold removals and changes/additions
+to_remove = {}
+to_change_A = {}
+to_change_CNAME = {}
 
-if False and len(filtered_rrsets_dict) == 0:
-    print("No RRsets starting with 'test' found.")
-    exit(-1)
+static_dict = {
+    "*": "89.185.96.125",
+    "hamip.at.": "89.185.96.125"
+}
+
+# Identify keys to remove (present in old_dict but not in new_dict)
+for key in rrsets_dict_on_server:
+    key_minus = key.replace(".hamip.at.","")
+    if (key_minus not in hamnetdb_dict_name_ip and key_minus not in hamnetdb_dict_aliases_cname
+            and key_minus not in static_dict):
+        to_remove[key_minus] = rrsets_dict_on_server[key]
+
+# Identify keys to change/add
+for key in hamnetdb_dict_name_ip:
+    # if new or changed
+    key_plus = key+".hamip.at."
+    if key_plus not in rrsets_dict_on_server or hamnetdb_dict_name_ip[key] != rrsets_dict_on_server[key_plus]:
+        to_change_A[key] = hamnetdb_dict_name_ip[key]
+
+for key in hamnetdb_dict_aliases_cname:
+    # if new or changed
+    key_plus = key+".hamip.at."
+    if key_plus not in rrsets_dict_on_server or hamnetdb_dict_aliases_cname[key]+".hamip.at." != rrsets_dict_on_server[key_plus]:
+        to_change_CNAME[key] = hamnetdb_dict_aliases_cname[key]
+
+# Print the result
+print("Keys to be removed:", len(to_remove))
+print(to_remove)
+print("\nKeys A to be changed or added:", len(to_change_A))
+print(to_change_A)
+print("\nKeys CNAME to be changed or added:", len(to_change_CNAME))
+print(to_change_CNAME)
 
 # Convert the dictionary into the RRset JSON structure
-rrsets = [
+rrsets_remove = [
     {
-        "name": f"{name}",
+        "name": f"{name}.hamip.at.",
         "type": "A",
         "changetype": "DELETE"
     }
-    for name, ip in filtered_rrsets_dict.items()
+    for name, ip in to_remove.items()
 ]
 
 
-rrsets_part_name = [
+rrsets_change_A = [
     {
         "name": f"{name}.hamip.at.",
         "type": "A",
@@ -361,10 +414,10 @@ rrsets_part_name = [
             }
         ]
     }
-    for name, ip in name_ip_dict.items()
+    for name, ip in to_change_A.items()
 ]
 
-rrsets = [
+rrsets_change_CNAME = [
     {
         "name": f"{name}.hamip.at.",
         "type": "CNAME",
@@ -377,16 +430,23 @@ rrsets = [
             }
         ]
     }
-    for name, cname in aliases_cname_dict.items()
+    for name, cname in to_change_CNAME.items()
 ]
 
 
 
 # Create the payload
-rrset_payload = {
-    "rrsets": rrsets
+rrset_remove_payload = {
+    "rrsets": rrsets_remove
 }
-
+# Create the payload
+rrset_change_A_payload = {
+    "rrsets": rrsets_change_A
+}
+# Create the payload
+rrset_change_CNAME_payload = {
+    "rrsets": rrsets_change_CNAME
+}
 
 
 # update header, here we need to specify the content type
@@ -397,29 +457,55 @@ headers = {
 
 API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
 
-response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_payload))
-
+response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_remove_payload))
 
 # Check the response
 if response.status_code == 204:
     print("RRsets patched/deleted successfully.")
 else:
-   print(f"Failed to patch/delete RRsets. Status code: {response.status_code}")
+   print(f"1Failed to patch/delete RRsets. Status code: {response.status_code}")
    print("Response:", response.text)
-   print("Payload:", rrset_payload)
+   print("Payload:", rrset_remove_payload)
+   exit(-1)
+
+response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_change_A_payload))
+
+# Check the response
+if response.status_code == 204:
+    print("RRsets patched/deleted successfully.")
+else:
+   print(f"2Failed to patch/delete RRsets. Status code: {response.status_code}")
+   print("Response:", response.text)
+   print("Payload:", rrset_change_A_payload)
+   exit(-1)
+
+response = requests.patch(API_ENDPOINT, headers=headers, data=json.dumps(rrset_change_CNAME_payload))
+
+# Check the response
+if response.status_code == 204:
+    print("RRsets patched/deleted successfully.")
+else:
+   print(f"3Failed to patch/delete RRsets. Status code: {response.status_code}")
+   print("Response:", response.text)
+   print("Payload:", rrset_change_CNAME_payload)
    exit(-1)
 
 
 # Update serial
 
 # Set SOA-EDIT to INCREASE
-payload = {
+alternative_payload = {
         "name": "hamip.at.",
         "soa_edit_api": "INCREASE",
         "kind": "Native"
 
     }
 
+payload = {
+    "soa_edit_api": "INCREASE",
+    "kind": "Native",
+    "soa_edit": "INCREASE"
+}
 
 
 API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
