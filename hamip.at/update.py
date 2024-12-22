@@ -18,6 +18,8 @@ import random
 # to parse IPs
 import ipaddress
 
+from collections import namedtuple
+
 # https://doc.powerdns.com/authoritative/http-api/zone.html
 
 API_ENDPOINT_BASE = "https://dnsapi.netplanet.at/api"
@@ -56,17 +58,20 @@ def read_auth_key(file_path):
 
 # Function to generate random domains including a random 32-digit number
 def generate_random_subdomain():
-    return f"test{random.randint(10**31, 10**32 - 1)}.hamip.at"
+    return f"test{random.randint(10 ** 31, 10 ** 32 - 1)}.hamip.at"
+
 
 # Function to generate a random IP address in the 192.168.x.x range
 def generate_random_ip():
     return f"192.168.{random.randint(0, 255)}.{random.randint(0, 255)}"
+
 
 # Create the rrset_dict with n random entries
 rrset_dict = {
     generate_random_subdomain(): generate_random_ip()
     for _ in range(10)
 }
+
 
 def print_response(response):
     # make response more readable
@@ -77,15 +82,17 @@ def print_response(response):
         print("Failed to decode JSON response")
         print(response.text)
 
-def request_patch(endpoint,headers,payload,status_code):
+
+def request_patch(endpoint, headers, payload, status_code):
     response = requests.patch(endpoint, headers=headers, data=json.dumps(payload))
     # Check the response
     if response.status_code != status_code:
-       print(f"Failed to patch. Status code: {response.status_code}")
-       print("Response:", response.text)
-       print("Payload:", payload)
-       exit(1)
+        print(f"Failed to patch. Status code: {response.status_code}")
+        print("Response:", response.text)
+        print("Payload:", payload)
+        exit(1)
     return response
+
 
 def get_hamnetdb_dhcp(dhcp_dict):
     # Endpoint for HamnetDB
@@ -110,7 +117,6 @@ def get_hamnetdb_dhcp(dhcp_dict):
     #     "no_check": 0,
     #     "comment": ""
     # },
-
 
     try:
         response = requests.get(HAMNETDB_ENDPOINT)
@@ -178,7 +184,7 @@ def get_hamnetdb_dhcp(dhcp_dict):
     # print(dhcp_dict)
 
 
-def get_hamnetdb_hosts(name_ip_dict, aliases_cname_dict):
+def get_hamnetdb_hosts_obsolete(name_ip_dict, aliases_cname_dict):
     # Endpoint for HamnetDB
     HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
 
@@ -245,15 +251,118 @@ def get_hamnetdb_hosts(name_ip_dict, aliases_cname_dict):
     except json.JSONDecodeError:
         print("Failed to decode JSON data")
 
+Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
+
+
+def get_hamnetdb_hosts(hamnet_dict):
+    # Endpoint for HamnetDB
+    HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
+
+    # Example response:
+    # {
+    #     "ip": "44.143.60.66",
+    #     "edited": "2023-05-13 09:55:56",
+    #     "comment": "Main web server OE3XNR, iGate APRS 144.800 MHz",
+    #     "routing": 0,
+    #     "monitor": 1,
+    #     "mac": "",
+    #     "radioparam": "",
+    #     "no_ping": 0,
+    #     "rawip": 747584578,
+    #     "site": "oe3xnr",
+    #     "id": 14448,
+    #     "aliases": "www.oe3xnr,aprs.oe3xnr,index.oe3xnr,web.oe3xzr,admin.oe3xnr,shack.oe3xnr,aprs.oe3xnr,cam.oe3xnr,cam.oe3xhr,search.oe3xnr,file.oe3xnr,search.oe3xnr",
+    #     "maintainer": "",
+    #     "rw_maint": 0,
+    #     "name": "web.oe3xnr",
+    #     "typ": "Service",
+    #     "version": 16,
+    #     "editor": "oe3dzw",
+    #     "deleted": 0
+    # },
+
+    try:
+        response = requests.get(HAMNETDB_ENDPOINT)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data from HamnetDB: {e}")
+        return
+
+    try:
+        entries = response.json()
+        print("HamnetDB-size:", len(entries))
+
+        # Iterate over each entry
+        for entry in entries:
+            site = entry.get("site")
+            name = entry.get("name")
+            ip = entry.get("ip")
+            deleted = entry.get("deleted")
+            if deleted == 0 and site.startswith("oe"):
+                # Add name and IP to name_ip_dict
+
+                if name and ip and name not in hamnet_dict:
+                    hamnet_dict[name] = Resource_record(content=ip, type="A", ttl=600)
+                # Add aliases and IP to aliases_ip_dict
+                aliases = entry.get("aliases", "")
+                if aliases:
+                    for alias in aliases.split(','):
+                        alias_strip = alias.strip()
+                        if alias_strip != name and alias_strip not in hamnet_dict:
+                            hamnet_dict[alias_strip] = Resource_record(content=name, type="CNAME", ttl=600)
+
+        # Show the results
+        print(f"Dictionary: {len(hamnet_dict)}")
+        # print(json.dumps(hamnet_dict, indent=2))
+
+    except json.JSONDecodeError:
+        print("Failed to decode JSON data")
+
+
+def get_current_zone(zone_id,endpoint, headers):
+    # current zone
+    API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
+    response = requests.get(API_ENDPOINT, headers=headers)
+
+    # Sample record
+    #               {'comments': [],
+    #              'name': 'test.hamip.at.',
+    #              'records': [{'content': '192.168.49.0', 'disabled': False}],
+    #              'ttl': 3600,
+    #              'type': 'A'},
+
+
+    # Parse the JSON data
+    data = response.json()
+    zone_data = data.get(zone_id, {})
+
+    # Retrieve only the relevant information from rrsets
+    rrsets_dict_on_server = {}
+    for rrset in data.get('rrsets', []):
+        name = rrset.get('name')
+        for record in rrset.get('records', []):
+            # Include 'A' type records
+            if rrset.get('type') == 'A':
+                ip_address = record.get('content')
+                rrsets_dict_on_server[name] = ip_address
+            # Include 'CNAME' type records
+            if rrset.get('type') == 'CNAME':
+                cname = record.get('content')
+                rrsets_dict_on_server[name] = cname
+
+    print(f"Rrsets on server: {len(rrsets_dict_on_server)}")
+
+    if len(rrsets_dict_on_server) == 0:
+        print("failed to get rr_sets from server")
+        exit(-1)
+    return(rrsets_dict_on_server)
 
 # Initialize dictionaries
-hamnetdb_dict_name_ip = {}
-hamnetdb_dict_aliases_cname = {}
-get_hamnetdb_hosts(hamnetdb_dict_name_ip,hamnetdb_dict_aliases_cname)
+hamnetdb_dict = {}
+get_hamnetdb_hosts(hamnetdb_dict)
 
 dhcp_dict = {}
 # get_hamnetdb_dhcp(dhcp_dict)
-
 
 
 api_key = read_auth_key(API_KEY_LOCATION)
@@ -297,11 +406,10 @@ except json.JSONDecodeError:
     print("Failed to decode JSON response")
     print(response.text)
 
-
 # request to load data into rrset and get serial
 
 # getupdated zone
-API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
+API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
 response = requests.get(API_ENDPOINT, headers=headers)
 
 data = response.json()
@@ -322,75 +430,47 @@ print(f"Current edited_serial: {edited_serial}")
 if edited_serial == None:
     print("No edited_serial,failed")
     print_response(response)
-    exit(-1)
+    exit(1)
 
-# current zone
-API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
-response = requests.get(API_ENDPOINT, headers=headers)
+rrsets_dict_on_server = get_current_zone(zone_id,API_ENDPOINT, headers)
 
-# Parse the JSON data
-data = response.json()
-zone_data = data.get(zone_id, {})
-
-# Retrieve only the relevant information from rrsets
-rrsets_dict_on_server = {}
-for rrset in data.get('rrsets', []):
-    name = rrset.get('name')
-    for record in rrset.get('records', []):
-        # Include 'A' type records
-        if rrset.get('type') == 'A':
-            ip_address = record.get('content')
-            rrsets_dict_on_server[name] = ip_address
-        # Include 'CNAME' type records
-        if rrset.get('type') == 'CNAME':
-            cname = record.get('content')
-            rrsets_dict_on_server[name] = cname
-
-print(f"Rrsets on server: {len(rrsets_dict_on_server)}")
-
-if len(rrsets_dict_on_server)==0:
-    print("failed to get rr_sets from server")
-    exit(-1)
 
 # compare hamnetdb_dict_name_ip and hamnetdb_dict_aliases_cname with rrsets_dict_on_server
 
 # Dictionaries to hold removals and changes/additions
 to_remove = {}
-to_change_A = {}
-to_change_CNAME = {}
+to_change = {}
 
 static_dict = {
-    "*": "89.185.96.125",
-    "hamip.at.": "89.185.96.125"
+    "*": Resource_record(content="89.185.96.125", type="A", ttl=600),
+    "hamip.at.": Resource_record(content="89.185.96.125",type="A", ttl=600)
 }
 
 # Identify keys to remove (present in old_dict but not in new_dict)
 for key in rrsets_dict_on_server:
-    key_minus = key.replace(".hamip.at.","")
-    if (key_minus not in hamnetdb_dict_name_ip and key_minus not in hamnetdb_dict_aliases_cname
+    key_minus = key.replace(".hamip.at.", "")
+    if (key_minus not in hamnetdb_dict
             and key_minus not in static_dict):
         to_remove[key_minus] = rrsets_dict_on_server[key]
 
 # Identify keys to change/add
-for key in hamnetdb_dict_name_ip:
+for key in hamnetdb_dict:
     # if new or changed
-    key_plus = key+".hamip.at."
-    if key_plus not in rrsets_dict_on_server or hamnetdb_dict_name_ip[key] != rrsets_dict_on_server[key_plus]:
-        to_change_A[key] = hamnetdb_dict_name_ip[key]
+    key_plus = key + ".hamip.at."
+    if (key_plus not in rrsets_dict_on_server or
+            (hamnetdb_dict[key].type == "A" and hamnetdb_dict[key].content != rrsets_dict_on_server[key_plus]) or
+            (hamnetdb_dict[key].type == "CNAME" and hamnetdb_dict[key].content+".hamip.at." != rrsets_dict_on_server[key_plus])):
+        to_change[key] = hamnetdb_dict[key]
+        print(key_plus not in rrsets_dict_on_server,(hamnetdb_dict[key].type == "A" and hamnetdb_dict[key].content != rrsets_dict_on_server[key_plus]) ,(hamnetdb_dict[key].type == "CNAME" and hamnetdb_dict[key].content+".hamip.at." != rrsets_dict_on_server[key_plus]))
+        print(to_change[key], rrsets_dict_on_server[key_plus])
 
-for key in hamnetdb_dict_aliases_cname:
-    # if new or changed
-    key_plus = key+".hamip.at."
-    if key_plus not in rrsets_dict_on_server or hamnetdb_dict_aliases_cname[key]+".hamip.at." != rrsets_dict_on_server[key_plus]:
-        to_change_CNAME[key] = hamnetdb_dict_aliases_cname[key]
 
 # Print the result
 print("Keys to be removed:", len(to_remove))
-print(to_remove)
-print("\nKeys A to be changed or added:", len(to_change_A))
-print(to_change_A)
-print("\nKeys CNAME to be changed or added:", len(to_change_CNAME))
-print(to_change_CNAME)
+# print(to_remove)
+print("\nKeys to be changed or added:", len(to_change))
+# print(to_change)
+
 
 # Convert the dictionary into the RRset JSON structure
 rrsets_remove = [
@@ -402,53 +482,31 @@ rrsets_remove = [
     for name, ip in to_remove.items()
 ]
 
-
-rrsets_change_A = [
+rrsets_change = [
     {
-        "name": f"{name}.hamip.at.",
-        "type": "A",
-        "ttl": 3600,
+        "name": f"{key}.hamip.at.",
+        "type": value.type,
+        "ttl": value.ttl,
         "changetype": "REPLACE",
         "records": [
             {
-                "content": ip,
+                "content": value.content + ".hamip.at." if value.type == "CNAME" else value.content,
                 "disabled": False
             }
         ]
     }
-    for name, ip in to_change_A.items()
+    for key, value in to_change.items()
 ]
-
-rrsets_change_CNAME = [
-    {
-        "name": f"{name}.hamip.at.",
-        "type": "CNAME",
-        "ttl": 3600,
-        "changetype": "REPLACE",
-        "records": [
-            {
-                "content": f"{cname}.hamip.at.",
-                "disabled": False
-            }
-        ]
-    }
-    for name, cname in to_change_CNAME.items()
-]
-
-
 
 # Create the payload
 rrset_remove_payload = {
     "rrsets": rrsets_remove
 }
 # Create the payload
-rrset_change_A_payload = {
-    "rrsets": rrsets_change_A
+rrset_change_payload = {
+    "rrsets": rrsets_change
 }
-# Create the payload
-rrset_change_CNAME_payload = {
-    "rrsets": rrsets_change_CNAME
-}
+
 
 
 # update header, here we need to specify the content type
@@ -457,11 +515,13 @@ headers = {
     'Content-Type': 'application/json'
 }
 
-API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
-request_patch(API_ENDPOINT,headers,rrset_remove_payload,204)
-request_patch(API_ENDPOINT,headers,rrset_change_A_payload,204)
-request_patch(API_ENDPOINT,headers,rrset_change_CNAME_payload,204)
+API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
+request_patch(API_ENDPOINT, headers, rrset_remove_payload, 204)
+request_patch(API_ENDPOINT, headers, rrset_change_payload, 204)
 
+
+# serial is updated automatically in some magic. this should enable the setting, it needs
+# to be done only once, not at every update
 UPDATE_SERIAL = False
 
 if UPDATE_SERIAL:
@@ -472,7 +532,7 @@ if UPDATE_SERIAL:
         "soa_edit": "INCREASE"
     }
 
-    API_ENDPOINT = API_ENDPOINT_BASE+"/v1/servers/localhost/zones/hamip.at"
+    API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
     response = requests.put(API_ENDPOINT, headers=headers, data=json.dumps(payload))
 
     # Check the response status
@@ -482,6 +542,6 @@ if UPDATE_SERIAL:
         print(f"Failed to update zone. Status code: {response.status_code}")
         print("Response:", response.text)
 
-    # getupdated zone
-    response = requests.get(API_ENDPOINT, headers=headers)
-    print_response(response)
+# getupdated zone
+response = requests.get(API_ENDPOINT, headers=headers)
+print_response(response)
