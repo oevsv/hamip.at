@@ -457,12 +457,17 @@ for key in rrsets_dict_on_server:
 for key in hamnetdb_dict:
     # if new or changed
     key_plus = key + ".hamip.at."
-    if (key_plus not in rrsets_dict_on_server or
+    key_plus_not_on_server = key_plus not in rrsets_dict_on_server
+    if (key_plus_not_on_server or
             (hamnetdb_dict[key].type == "A" and hamnetdb_dict[key].content != rrsets_dict_on_server[key_plus]) or
             (hamnetdb_dict[key].type == "CNAME" and hamnetdb_dict[key].content+".hamip.at." != rrsets_dict_on_server[key_plus])):
         to_change[key] = hamnetdb_dict[key]
-        print(key_plus not in rrsets_dict_on_server,(hamnetdb_dict[key].type == "A" and hamnetdb_dict[key].content != rrsets_dict_on_server[key_plus]) ,(hamnetdb_dict[key].type == "CNAME" and hamnetdb_dict[key].content+".hamip.at." != rrsets_dict_on_server[key_plus]))
-        print(to_change[key], rrsets_dict_on_server[key_plus])
+        if (key_plus_not_on_server):
+            print(f"key_plus {key_plus} not in rrsets_dict_on_server")
+            print(f"to_change[key] {to_change[key]}")
+        else:
+            print((hamnetdb_dict[key].type == "A" and hamnetdb_dict[key].content != rrsets_dict_on_server[key_plus]) ,(hamnetdb_dict[key].type == "CNAME" and hamnetdb_dict[key].content+".hamip.at." != rrsets_dict_on_server[key_plus]))
+            print(to_change[key], rrsets_dict_on_server[key_plus])
 
 
 # Print the result
