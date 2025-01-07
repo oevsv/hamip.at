@@ -21,7 +21,8 @@ import ipaddress
 from collections import namedtuple
 
 # https://doc.powerdns.com/authoritative/http-api/zone.html
-
+# local instance of PowerDNS
+# TODO: remove code-duplication, this should just be a proof-of-concept
 API_ENDPOINT_BASE = "http://127.0.0.1:8081/api"
 API_KEY_LOCATION = "/etc/hamip/key-local.asc"
 
