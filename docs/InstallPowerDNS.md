@@ -1,6 +1,6 @@
 # How to install and setup PowerDNS
 
-The setup consists of a local HamNet-PowerDNS server running as master for hamnet and a remote PowerDNS server serving
+The setup consists of a local HamNet-PowerDNS server running as master for Hamnet and a remote PowerDNS server serving
 in the public Internet.
 The remote server is hosted by an ISP, the only local configuration is the setup of the API (endpoint URL and key).
 
