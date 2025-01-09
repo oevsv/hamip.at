@@ -20,6 +20,8 @@ import ipaddress
 
 from collections import namedtuple
 
+import time
+
 # https://doc.powerdns.com/authoritative/http-api/zone.html
 
 API_ENDPOINT_BASE = "https://dnsapi.netplanet.at/api"
@@ -84,13 +86,14 @@ def print_response(response):
 
 
 def request_patch(endpoint, headers, payload, status_code):
+    print(f"Patch payload: {payload}")
     response = requests.patch(endpoint, headers=headers, data=json.dumps(payload))
     # Check the response
     if response.status_code != status_code:
         print(f"Failed to patch. Status code: {response.status_code}")
         print("Response:", response.text)
         print("Payload:", payload)
-        exit(1)
+        raise NameError(f"Failed to patch. Status code: {response.status_code}")
     return response
 
 
@@ -223,6 +226,10 @@ def get_hamnetdb_hosts(hamnet_dict):
     try:
         entries = response.json()
         print("HamnetDB-size:", len(entries))
+        # filter entries, thus massive speedup on later processing
+        entries = [entry for entry in entries if entry.get('site', '').startswith('oe')]
+        print("HamnetDB-size, OE filtered:", len(entries))
+
 
         # Iterate over each entry
         for entry in entries:
@@ -230,7 +237,7 @@ def get_hamnetdb_hosts(hamnet_dict):
             name = entry.get("name")
             ip = entry.get("ip")
             deleted = entry.get("deleted")
-            if deleted == 0 and site.startswith("oe"):
+            if deleted == 0:
                 # Add name and IP to name_ip_dict
 
                 if name and ip and name not in hamnet_dict:
@@ -243,33 +250,28 @@ def get_hamnetdb_hosts(hamnet_dict):
                         if alias_strip != name and alias_strip not in hamnet_dict:
                             hamnet_dict[alias_strip] = Resource_record(content=name, type="CNAME", ttl=600)
 
+        start_time = time.time()
+
         # New iteration to add entries to add sites hot having a record
         for entry in entries:
             site = entry.get("site")
             if site not in hamnet_dict:
-                for name, record in hamnet_dict.items():
-                    if name == "www."+site:
-                        hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
-                        break
-                    if name == "web." + site:
-                        hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
-                        break
-                    if name == "router." + site:
-                        hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
-                        break
+                if "www."+site in hamnet_dict or "www." + site in hamnet_dict or "router." + site in hamnet_dict:
+                    hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
+                else:
+                    # fallback to any other prefix (e.g. bb.<site>)
+                    for name, record in hamnet_dict.items():
+                        if name.endswith("." + site):
+                            hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
+                            break
 
-        # Final iteration to add with nothing (add any prefix)
-        for entry in entries:
-            site = entry.get("site")
-            if site not in hamnet_dict:
-                for name, record in hamnet_dict.items():
-                    if name.endswith("." + site):
-                        hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
-                        break
+        end_time = time.time()
 
+        # Calculate the elapsed time
+        elapsed_time = end_time - start_time
 
-
-
+        # Display the time taken
+        print(f"Function execution time: {elapsed_time:.6f} seconds")
 
         # Show the results
         print(f"Dictionary: {len(hamnet_dict)}")
@@ -280,6 +282,9 @@ def get_hamnetdb_hosts(hamnet_dict):
 
 
 def get_current_zone(zone_id, endpoint, headers):
+    # Sample response:
+    # 'tun-oe8xvr.ir3uda.hamip.at.': Resource_record(type='A', content='44.134.125.249', ttl=600)
+
     # current zone
     API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
     response = requests.get(API_ENDPOINT, headers=headers)
@@ -299,15 +304,14 @@ def get_current_zone(zone_id, endpoint, headers):
     rrsets_dict_on_server = {}
     for rrset in data.get('rrsets', []):
         name = rrset.get('name')
+        type = rrset.get('type')
         for record in rrset.get('records', []):
-            # Include 'A' type records
-            if rrset.get('type') == 'A':
-                ip_address = record.get('content')
-                rrsets_dict_on_server[name] = ip_address
-            # Include 'CNAME' type records
-            if rrset.get('type') == 'CNAME':
-                cname = record.get('content')
-                rrsets_dict_on_server[name] = cname
+            # Include specific record types
+            if type == 'A' or type == 'CNAME' or type == 'TXT':
+                content = record.get('content')
+                ttl = rrset.get('ttl')
+                rrsets_dict_on_server[name] = Resource_record(content=content, type=type, ttl=ttl)
+
 
     print(f"Rrsets on server: {len(rrsets_dict_on_server)}")
 
@@ -393,6 +397,9 @@ if edited_serial == None:
     exit(1)
 
 rrsets_dict_on_server = get_current_zone(zone_id, API_ENDPOINT, headers)
+# print("rrsets_dict_on_server")
+# print(rrsets_dict_on_server)
+
 
 # compare hamnetdb_dict_name_ip and hamnetdb_dict_aliases_cname with rrsets_dict_on_server
 
@@ -407,56 +414,46 @@ static_dict = {
 
 # Identify keys to remove (present in old_dict but not in new_dict)
 for key in rrsets_dict_on_server:
-    key_minus = key.replace(".hamip.at.", "")
-    if (key_minus not in hamnetdb_dict
-            and key_minus not in static_dict):
-        to_remove[key_minus] = rrsets_dict_on_server[key]
+    if (key not in hamnetdb_dict
+            and key not in static_dict):
+        to_remove[key] = rrsets_dict_on_server[key]
+
+print("Keys to be removed:", len(to_remove))
+# print(to_remove)
 
 # Identify keys to change/add
 for key in hamnetdb_dict:
     # if new or changed
-    key_plus = key + ".hamip.at."
-    key_plus_not_on_server = key_plus not in rrsets_dict_on_server
-    if (key_plus_not_on_server or
-            (hamnetdb_dict[key].type == "A" and hamnetdb_dict[key].content != rrsets_dict_on_server[key_plus]) or
-            (hamnetdb_dict[key].type == "CNAME" and hamnetdb_dict[key].content + ".hamip.at." != rrsets_dict_on_server[
-                key_plus])):
+    key_not_on_server = key not in rrsets_dict_on_server
+    # add if not there
+    if (key_not_on_server):
         to_change[key] = hamnetdb_dict[key]
-        if (key_plus_not_on_server):
-            print(f"key_plus {key_plus} not in rrsets_dict_on_server")
-            print(f"to_change[key] {to_change[key]}")
-        else:
-            print((hamnetdb_dict[key].type == "A" and hamnetdb_dict[key].content != rrsets_dict_on_server[key_plus]), (
-                        hamnetdb_dict[key].type == "CNAME" and hamnetdb_dict[key].content + ".hamip.at." !=
-                        rrsets_dict_on_server[key_plus]))
-            print(to_change[key], rrsets_dict_on_server[key_plus])
+    elif rrsets_dict_on_server[key] != hamnetdb_dict[key]:
+        to_change[key] = hamnetdb_dict[key]
 
-# Print the result
-print("Keys to be removed:", len(to_remove))
-# print(to_remove)
+
 print("\nKeys to be changed or added:", len(to_change))
 # print(to_change)
-
 
 # Convert the dictionary into the RRset JSON structure
 rrsets_remove = [
     {
-        "name": f"{name}.hamip.at.",
-        "type": "A",
+        "name": f"{key}",
+        "type": value.type,
         "changetype": "DELETE"
     }
-    for name, ip in to_remove.items()
+    for key, value in to_remove.items()
 ]
 
 rrsets_change = [
     {
-        "name": f"{key}.hamip.at.",
+        "name": f"{key}",
         "type": value.type,
         "ttl": value.ttl,
         "changetype": "REPLACE",
         "records": [
             {
-                "content": value.content + ".hamip.at." if value.type == "CNAME" else value.content,
+                "content": value.content,
                 "disabled": False
             }
         ]
