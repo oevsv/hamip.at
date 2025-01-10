@@ -61,23 +61,6 @@ def read_auth_key(file_path):
         return None
 
 
-# Function to generate random domains including a random 32-digit number
-def generate_random_subdomain():
-    return f"test{random.randint(10 ** 31, 10 ** 32 - 1)}.hamip.at"
-
-
-# Function to generate a random IP address in the 192.168.x.x range
-def generate_random_ip():
-    return f"192.168.{random.randint(0, 255)}.{random.randint(0, 255)}"
-
-
-# Create the rrset_dict with n random entries
-rrset_dict = {
-    generate_random_subdomain(): generate_random_ip()
-    for _ in range(10)
-}
-
-
 def print_response(response):
     # make response more readable
     try:
