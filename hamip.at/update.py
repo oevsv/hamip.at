@@ -13,12 +13,19 @@ API_ENDPOINT_HAMNET = "http://127.0.0.1:8081/api"
 API_KEY_HAMNET_LOCATION = "/etc/hamip/key_hamnet.asc"
 HAMIP_AT = '.hamip.at.'
 
-static_dict = {
+static_dict_isp = {
     "*.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
     "www.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
     "hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
+    "ns.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
 }
 
+static_dict_hamnet = {
+    "*.hamip.at.": Resource_record(content="44.143.8.131", type="A", ttl=600),
+    "www.hamip.at.": Resource_record(content="44.143.8.131", type="A", ttl=600),
+    "hamip.at.": Resource_record(content="44.143.8.131", type="A", ttl=600),
+    "ns.hamip.at.": Resource_record(content="44.143.0.10", type="A", ttl=600),
+}
 
 DEBUG = False
 
@@ -63,9 +70,7 @@ def print_response(response):
         print(response.text)
 
 
-
-
-def prepare_patch(task, delete, api_endpoint,api_key):
+def prepare_patch(task, delete, api_endpoint, api_key):
     CHUNK_SIZE = 500
 
     # split into chunks
@@ -109,7 +114,8 @@ def prepare_patch(task, delete, api_endpoint,api_key):
 
         request_patch(api_endpoint, rrset_payload, 204, api_key)
 
-def process_powerdns(api_endpoint, api_key):
+
+def process_powerdns(api_endpoint, api_key, is_hamnet):
     zone_id = get_zones(api_endpoint, api_key)
 
     response = get_zone(api_endpoint, api_key)
@@ -144,27 +150,27 @@ def process_powerdns(api_endpoint, api_key):
     to_remove = {}
     to_change = {}
 
-
     now = datetime.now()
     # Format the date and time, and include milliseconds
     formatted_date_time = now.strftime('%Y-%m-%d_%H-%M-%S') + f"_{now.microsecond // 1000:03d}"
     tag_dict = {
-        "timestamp.hamip.at.": Resource_record(content="\""+formatted_date_time+"\"", type="TXT", ttl=60),
-        }
+        "timestamp.hamip.at.": Resource_record(content="\"" + formatted_date_time + "\"", type="TXT", ttl=60),
+    }
 
-
-    reference_dict = hamnetdb_dict | static_dict | tag_dict
-
+    if is_hamnet:
+        reference_dict = (hamnetdb_dict | static_dict_hamnet | tag_dict)
+    else:
+        reference_dict = (hamnetdb_dict | static_dict_isp | tag_dict)
     # Process removal
 
     for key in rrsets_dict_on_server:
-        if (key not in reference_dict):
+        if key not in reference_dict:
             to_remove[key] = rrsets_dict_on_server[key]
 
     print("Keys to be removed:", len(to_remove))
     # print(to_remove)
 
-    prepare_patch(to_remove, True, api_endpoint,api_key)
+    prepare_patch(to_remove, True, api_endpoint, api_key)
 
     # Identify keys to change/add
     for key in reference_dict:
@@ -213,6 +219,5 @@ if api_key_hamnet is None:
     print(f"Error: Key not found at", API_KEY_HAMNET_LOCATION, "or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
 
-
-process_powerdns(api_endpoint, api_key_isp)
-process_powerdns(API_ENDPOINT_HAMNET, api_key_hamnet)
+process_powerdns(api_endpoint, api_key_isp, False)
+process_powerdns(API_ENDPOINT_HAMNET, api_key_hamnet, True)
