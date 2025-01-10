@@ -68,12 +68,33 @@ def get_zones(api_endpoint,api_key):
 
         # Iterate over all keys and look for the 'url' field
         found_url = False
-        for key, value in response_json.items():
-            # Try to get the 'url' from the sub-dictionary
-            url = value.get('url')
-            if url and url == expected_url:
-                zone_id = key
-                found_url = True
+
+        # ISP:
+        # {'2503': {'account': '', 'catalog': '', 'dnssec': False, 'edited_serial': 2024101520, 'id': 'hamip.at.',
+        #           'kind': 'Native', 'last_check': 0, 'masters': [], 'name': 'hamip.at.', 'notified_serial': 0,
+        #           'serial': 2024101520, 'url': '/api/v1/servers/localhost/zones/hamip.at.'}}
+        #
+        # Hamnet:
+        # [{'account': '', 'catalog': '', 'dnssec': False, 'edited_serial': 1, 'id': 'hamip.at.', 'kind': 'Native',
+        #   'last_check': 0, 'masters': [], 'name': 'hamip.at.', 'notified_serial': 0, 'serial': 1,
+        #   'url': '/api/v1/servers/localhost/zones/hamip.at.'}]
+
+
+        print (response_json)
+        if isinstance(response_json, dict):
+            for key, value in response_json.items():
+                # Try to get the 'url' from the sub-dictionary
+                url = value.get('url')
+                if url and url == expected_url:
+                    zone_id = key
+                    found_url = True
+        else:
+            for item in response_json:  # response_json is a list of dictionaries
+                # Try to get the 'url' from the dictionary
+                url = item.get('url')
+                if url and url == expected_url:
+                    zone_id = item.get('id')  # Get the 'id' or 'zone_id' from the same dictionary
+                    found_url = True
 
         if found_url:
             print(f"Zone ID: {zone_id}")
