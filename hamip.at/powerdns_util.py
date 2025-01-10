@@ -160,9 +160,7 @@ def update_serial(api_endpoint,api_key):
 
     # Update serial
     payload = {
-        "soa_edit_api": "INCREASE",
-        "kind": "Native",
-        "soa_edit": "INCREASE"
+        "soa_edit_api": "INCREASE"
     }
 
     full_end_point = api_endpoint + "/v1/servers/localhost/zones/hamip.at"

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
-
-import os, sys
+from datetime import datetime
+import os, sys, time
 from pprint import pprint
 from hamnetdb_util import *
 from powerdns_util import *
@@ -14,8 +14,9 @@ API_KEY_HAMNET_LOCATION = "/etc/hamip/key_hamnet.asc"
 HAMIP_AT = '.hamip.at.'
 
 static_dict = {
-    "*": Resource_record(content="89.185.96.125", type="A", ttl=600),
-    "hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600)
+    "*.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
+    "www.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
+    "hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
 }
 
 
@@ -144,12 +145,20 @@ def process_powerdns(api_endpoint, api_key):
     to_change = {}
 
 
+    now = datetime.now()
+    # Format the date and time, and include milliseconds
+    formatted_date_time = now.strftime('%Y-%m-%d_%H-%M-%S') + f"_{now.microsecond // 1000:03d}"
+    tag_dict = {
+        "timestamp.hamip.at.": Resource_record(content="\""+formatted_date_time+"\"", type="TXT", ttl=60),
+        }
+
+
+    reference_dict = hamnetdb_dict | static_dict | tag_dict
 
     # Process removal
 
     for key in rrsets_dict_on_server:
-        if (key not in hamnetdb_dict
-                and key not in static_dict):
+        if (key not in reference_dict):
             to_remove[key] = rrsets_dict_on_server[key]
 
     print("Keys to be removed:", len(to_remove))
@@ -158,14 +167,14 @@ def process_powerdns(api_endpoint, api_key):
     prepare_patch(to_remove, True, api_endpoint,api_key)
 
     # Identify keys to change/add
-    for key in hamnetdb_dict:
+    for key in reference_dict:
         # if new or changed
         key_not_on_server = key not in rrsets_dict_on_server
         # add if not there
         if key_not_on_server:
-            to_change[key] = hamnetdb_dict[key]
-        elif rrsets_dict_on_server[key] != hamnetdb_dict[key]:
-            to_change[key] = hamnetdb_dict[key]
+            to_change[key] = reference_dict[key]
+        elif rrsets_dict_on_server[key] != reference_dict[key]:
+            to_change[key] = reference_dict[key]
 
     print("Keys to be changed or added:", len(to_change))
 
