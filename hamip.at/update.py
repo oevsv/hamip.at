@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import os, sys, requests, json
+import os, sys
 from pprint import pprint
 from hamnetdb_util import *
 from powerdns_util import *
