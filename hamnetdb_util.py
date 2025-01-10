@@ -1,5 +1,7 @@
 # hamnetdb_util.py
+import ipaddress
 import json
+import re
 import time
 from collections import namedtuple
 
@@ -62,7 +64,6 @@ def get_hamnetdb_hosts(hamnet_dict, hamip_at):
             if site not in site_list:
                 site_list.append(site)
             host_name = entry.get("name")+hamip_at
-
             ip = entry.get("ip")
             deleted = entry.get("deleted")
             if deleted == 0:
@@ -120,15 +121,143 @@ def get_hamnetdb_hosts(hamnet_dict, hamip_at):
         # print(json.dumps(hamnet_dict, indent=2))
 
     except json.JSONDecodeError:
-        print("Failed to decode JSON data")
+        raise NameError("Failed to decode JSON data")
 
-# util main
-HAMIP_AT = '.hamip.at.'
-some_dict = {}
-start_time = time.time()
-get_hamnetdb_hosts(some_dict, HAMIP_AT)
-for key in some_dict:
-    print(f"{key}: {some_dict[key]}")
-end_time = time.time()
-elapsed_time = end_time - start_time
-print(f"Function execution time: {elapsed_time:.6f} seconds")
+
+def get_hamnetdb_dhcp(dhcp_dict, hosts_dict, hamip_at):
+    # Endpoint for HamnetDB subnets
+    HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=subnet&json=1"
+
+    # {
+    #     "edited": "2021-06-06 16:10:23",
+    #     "id": 6041,
+    #     "ip": "44.143.53.32/28",
+    #     "deleted": 0,
+    #     "maintainer": "",
+    #     "editor": "oe3dzw",
+    #     "as_num": 0,
+    #     "rw_maint": 0,
+    #     "typ": "User-Network",
+    #     "version": 3,
+    #     "end_ip": 747582768,
+    #     "as_parent": 4223230011,
+    #     "dhcp_range": "35-46",
+    #     "begin_ip": 747582752,
+    #     "radioparam": "2422MHz@10MHz BW Omni",
+    #     "no_check": 0,
+    #     "comment": ""
+    # },
+
+    DEBUG = False
+
+    # convert hosts-dict into and ip-dict
+    ip_dict = {}
+    for host in hosts_dict:
+        if hosts_dict[host].type == 'A':
+            index = host.rfind(hamip_at)
+            site = host[host.rfind('.', 0, index - 1) + 1:]
+            ip_dict[hosts_dict[host].content] = site
+
+    if DEBUG:
+        print(ip_dict)
+
+    try:
+        response = requests.get(HAMNETDB_ENDPOINT)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        if DEBUG:
+            print(f"Error fetching data from HamnetDB: {e}")
+        raise NameError("Failed to decode JSON data")
+
+    try:
+        data = response.json()
+        if DEBUG:
+            print("HamnetDB-size:", len(data))
+
+        # Iterate over each subnet entry
+        for entry in data:
+            # Skip deleted entries
+            if entry.get("deleted") != 0:
+                continue
+
+            # Convert begin_ip to an IPv4 address
+            base_ip = str(ipaddress.IPv4Address(entry['begin_ip']))
+
+            # Parse the dhcp_range
+            dhcp_range = entry.get('dhcp_range', '')
+            if not dhcp_range:
+                continue
+
+            range_start, range_end = map(int, dhcp_range.split('-'))
+
+            # dhcp-44-143-60-39.oe3xnr - implied by consistency check of
+            # Hamnetdb "Site-Network is empty (no host address found)"
+
+            # Convert the CIDR to an IP network and compile the list of IPs
+            all_ips = []
+            cidr = entry.get('ip', '')
+            if DEBUG:
+                print(cidr)
+            if cidr:
+                try:
+                    network = ipaddress.ip_network(cidr, strict=False)
+                    ips = [str(ip) for ip in network.hosts()]
+                    all_ips.extend(ips)
+                except ValueError as e:
+                    print(f"Error processing CIDR {cidr}: {e}")
+                    continue
+
+            suffix = 'dhcp-range'+hamip_at
+
+            # get suffix from ip list (using e.g. "dhcp-44-143-33-179.oe2wao-1.hamip.at.")
+            suffix_found = False
+            for ip in all_ips:
+                if ip in ip_dict:
+                    suffix = ip_dict[ip]
+                    suffix_found = True
+                    break
+
+            if suffix_found:
+            # Generate the dictionary entries
+                for i in range(range_start, range_end + 1):
+                    octets = base_ip.split('.')
+                    octets[3] = str(i)  # Replace the last octet with each number in the range
+                    ip = '.'.join(octets)
+                    dhcp_dict[f"dhcp-{ip.replace('.', '-')}.{suffix}"] = (
+                        Resource_record(content=ip, type="A", ttl=600))
+
+    except (json.JSONDecodeError, ValueError) as e:
+        print("Failed to decode JSON data or parse ranges:", e)
+        raise NameError("Failed to decode JSON data")
+
+    # Print the resulting dictionary
+    # print(dhcp_dict)
+
+
+
+def main():
+    HAMIP_AT = '.hamip.at.'
+
+    hosts_dict = {}
+    start_time = time.time()
+    get_hamnetdb_hosts(hosts_dict, HAMIP_AT)
+    # for key in hosts_dict:
+    #     print(f"{key}: {hosts_dict[key]}")
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Function execution time: {elapsed_time:.6f} seconds")
+
+
+    dhcp_dict = {}
+    start_time = time.time()
+    get_hamnetdb_dhcp(dhcp_dict, hosts_dict, HAMIP_AT)
+    #for key in dhcp_dict:
+    #    print(f"{key}: {dhcp_dict[key]}")
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Size of dhcp_dict: {len(dhcp_dict)}")
+    print(f"Function execution time: {elapsed_time:.6f} seconds")
+
+# only execute main if not imported
+if __name__ == "__main__":
+    main()

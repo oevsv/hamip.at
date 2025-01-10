@@ -1,35 +1,19 @@
 #!/usr/bin/python3
 
-# required to read files
-import os
-# required for exit value
-import sys
-
-# needed for API request
-import requests
-
-import json
-# make json readable
+import os, sys, requests, json
 from pprint import pprint
-
-# to generate debugging/testing data
-import random
-
-# to parse IPs
-import ipaddress
-
 from collections import namedtuple
-
-import time
-
-from hamnetdb_util import get_hamnetdb_hosts
+from hamnetdb_util import get_hamnetdb_hosts, get_hamnetdb_dhcp
 
 # https://doc.powerdns.com/authoritative/http-api/zone.html
 
-API_ENDPOINT_BASE = "https://dnsapi.netplanet.at/api"
-API_KEY_LOCATION = "/etc/hamip/key.asc"
+API_ENDPOINT_ISP = "https://dnsapi.netplanet.at/api"
+API_KEY_ISP_LOCATION = "/etc/hamip/key.asc"
+API_ENDPOINT_HAMNET = "http://127.0.0.1:8081/api"
+API_KEY_HAMNET_LOCATION = "/etc/hamip/key_hamnet.asc"
 HAMIP_AT = '.hamip.at.'
 
+DEBUG = False
 
 # import authkey from /etc/hamip/key.asc
 def read_auth_key(file_path):
@@ -81,105 +65,18 @@ def request_patch(endpoint, headers, payload, status_code):
     # {'rrsets': [{'name': 'hr.oe5xoo.hamip.at.',       'type': 'A', 'ttl': 600, 'changetype': 'REPLACE',
     #            'records': [{'content': '44.143.108.254', 'disabled': False}]}
 
-    print(f"\nPatch payload: {payload}")
+    if DEBUG:
+        print(f"\nPatch payload: {payload}")
     response = requests.patch(endpoint, headers=headers, data=json.dumps(payload))
     # Check the response
     if response.status_code != status_code:
         print(f"Failed to patch. Status code: {response.status_code}")
         print("Response:", response.text)
         print("Payload:", payload)
-        raise NameError(f"Failed to patch. Status code: {response.status_code}")
+        raise NameError("Failed to patch.")
     return response
 
 
-def get_hamnetdb_dhcp(dhcp_dict):
-    # Endpoint for HamnetDB
-    HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=subnet&json=1"
-
-    # {
-    #     "edited": "2021-06-06 16:10:23",
-    #     "id": 6041,
-    #     "ip": "44.143.53.32/28",
-    #     "deleted": 0,
-    #     "maintainer": "",
-    #     "editor": "oe3dzw",
-    #     "as_num": 0,
-    #     "rw_maint": 0,
-    #     "typ": "User-Network",
-    #     "version": 3,
-    #     "end_ip": 747582768,
-    #     "as_parent": 4223230011,
-    #     "dhcp_range": "35-46",
-    #     "begin_ip": 747582752,
-    #     "radioparam": "2422MHz@10MHz BW Omni",
-    #     "no_check": 0,
-    #     "comment": ""
-    # },
-
-    try:
-        response = requests.get(HAMNETDB_ENDPOINT)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data from HamnetDB: {e}")
-        return
-
-    try:
-        data = response.json()
-        print("HamnetDB-size:", len(data))
-
-        # Iterate over each subnet entry
-        for entry in data:
-            # Skip deleted entries
-            if entry.get("deleted") != 0:
-                continue
-
-            # Convert begin_ip to an IPv4 address
-            base_ip = str(ipaddress.IPv4Address(entry['begin_ip']))
-
-            # Parse the dhcp_range
-            dhcp_range = entry.get('dhcp_range', '')
-            if not dhcp_range:
-                continue
-
-            range_start, range_end = map(int, dhcp_range.split('-'))
-
-            # dhcp-44-143-60-39.oe3xnr - implied by consistency check of
-            # Hamnetdb "Site-Network is empty (no host address found)"
-
-            # TODO: find first host, use that host as hostname for the dhcp-range (assume match)
-
-            # Convert the CIDR to an IP network and compile the list of IPs
-            all_ips = []
-            cidr = entry.get('ip', '')
-            print(cidr)
-            if cidr:
-                try:
-                    network = ipaddress.ip_network(cidr, strict=False)
-                    ips = [str(ip) for ip in network.hosts()]
-                    all_ips.extend(ips)
-                except ValueError as e:
-                    print(f"Error processing CIDR {cidr}: {e}")
-                    continue
-
-            print(all_ips)
-
-            # TODO: Now lookup hosts to find the name of the site
-            # TODO: Filter by oe-hosts
-
-            # Generate the dictionary entries
-            for i in range(range_start, range_end + 1):
-                octets = base_ip.split('.')
-                octets[3] = str(i)  # Replace the last octet with each number in the range
-                new_ip = '.'.join(octets)
-
-                name = "todo"
-                dhcp_dict[f"dhcp-{new_ip.replace('.', '-')}.{name}"] = new_ip
-
-    except (json.JSONDecodeError, ValueError) as e:
-        print("Failed to decode JSON data or parse ranges:", e)
-
-    # Print the resulting dictionary
-    # print(dhcp_dict)
 
 Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
 
@@ -188,7 +85,7 @@ def get_current_zone(zone_id, endpoint, headers):
     # 'tun-oe8xvr.ir3uda.hamip.at.': Resource_record(type='A', content='44.134.125.249', ttl=600)
 
     # current zone
-    API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
+    API_ENDPOINT = API_ENDPOINT_ISP + "/v1/servers/localhost/zones/hamip.at"
     response = requests.get(API_ENDPOINT, headers=headers)
 
     # Sample record
@@ -221,18 +118,95 @@ def get_current_zone(zone_id, endpoint, headers):
         exit(-1)
     return (rrsets_dict_on_server)
 
+def update_serial():
+    # Update serial
+    payload = {
+        "soa_edit_api": "INCREASE",
+        "kind": "Native",
+        "soa_edit": "INCREASE"
+    }
+
+    API_ENDPOINT = API_ENDPOINT_ISP + "/v1/servers/localhost/zones/hamip.at"
+    response = requests.put(API_ENDPOINT, headers=headers, data=json.dumps(payload))
+
+    # Check the response status
+    if response.status_code == 204:
+        print("Zone updated successfully.")
+    else:
+        print(f"Failed to update zone. Status code: {response.status_code}")
+        print("Response:", response.text)
+
+
+def prepare_patch(task, delete, api_endpoint):
+
+    CHUNK_SIZE = 500
+
+    # split into chunks
+    items_list = list(task.items())
+    for i in range(0, len(items_list),CHUNK_SIZE):
+        # Create a dictionary chunk
+        chunk = dict(items_list[i:i + CHUNK_SIZE])
+        # Process the current chunk
+
+
+        # Convert the dictionary into the RRset JSON structure
+        if  delete:
+            rrsets = [
+                {
+                    "name": f"{key}",
+                    "type": value.type,
+                    "changetype": "DELETE"
+                }
+                for key, value in chunk.items()
+            ]
+        else:
+            rrsets = [
+                {
+                    "name": f"{key}",
+                    "type": value.type,
+                    "ttl": value.ttl,
+                    "changetype": "REPLACE",
+                    "records": [
+                        {
+                            "content": value.content,
+                            "disabled": False
+                        }
+                    ]
+                }
+                for key, value in chunk.items()
+            ]
+
+
+        # Create the payload
+        rrset_payload = {
+            "rrsets": rrsets
+        }
+
+        # update header, here we need to specify the content type
+        headers = {
+            'X-API-Key': api_key,
+            'Content-Type': 'application/json'
+        }
+
+        ENDPOINT = api_endpoint + "/v1/servers/localhost/zones/hamip.at"
+        request_patch(ENDPOINT, headers, rrset_payload, 204)
+
 
 # Initialize dictionaries
 hamnetdb_dict = {}
 get_hamnetdb_hosts(hamnetdb_dict, HAMIP_AT)
 
-dhcp_dict = {}
-# get_hamnetdb_dhcp(dhcp_dict)
+USE_DHCP = False
+
+if USE_DHCP:
+    dhcp_dict = {}
+    get_hamnetdb_dhcp(dhcp_dict, hamnetdb_dict, HAMIP_AT)
+    hamnetdb_dict = hamnetdb_dict | dhcp_dict
 
 
-api_key = read_auth_key(API_KEY_LOCATION)
+api_key = read_auth_key(API_KEY_ISP_LOCATION)
 if api_key is None:
-    print(f"Error: Key not found at", API_KEY_LOCATION, "or could not be read.")
+    print(f"Error: Key not found at", API_KEY_ISP_LOCATION, "or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
 # print(api_key)
 
@@ -245,7 +219,7 @@ zone_id = None
 
 # Check if the server is alive
 try:
-    API_ENDPOINT: str = API_ENDPOINT_BASE + "/v1/servers/localhost/zones"
+    API_ENDPOINT: str = API_ENDPOINT_ISP + "/v1/servers/localhost/zones"
     response = requests.get(API_ENDPOINT, headers=headers)
     response_json = response.json()
 
@@ -274,7 +248,7 @@ except json.JSONDecodeError:
 # request to load data into rrset and get serial
 
 # getupdated zone
-API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
+API_ENDPOINT = API_ENDPOINT_ISP + "/v1/servers/localhost/zones/hamip.at"
 response = requests.get(API_ENDPOINT, headers=headers)
 
 data = response.json()
@@ -290,7 +264,8 @@ if serial == None:
 
 # Retrieve the serial number
 edited_serial = data.get('edited_serial', None)
-print(f"Current edited_serial: {edited_serial}")
+if DEBUG:
+    print(f"Current edited_serial: {edited_serial}")
 
 if edited_serial == None:
     print("No edited_serial,failed")
@@ -313,109 +288,40 @@ static_dict = {
     "hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600)
 }
 
-# Identify keys to remove (present in old_dict but not in new_dict)
-# intruduce limit to avoid too complex requests
-DELETE_MAX_COUNT = 10000
-delete_count = 0
+# Process removal
+
 for key in rrsets_dict_on_server:
     if (key not in hamnetdb_dict
             and key not in static_dict):
-        delete_count = delete_count + 1
-        if delete_count <= DELETE_MAX_COUNT:
-            to_remove[key] = rrsets_dict_on_server[key]
+        to_remove[key] = rrsets_dict_on_server[key]
 
 print("Keys to be removed:", len(to_remove))
 # print(to_remove)
 
-REPLACE_MAX_COUNT = 10000
-replace_count = 0
+prepare_patch(to_remove, True, API_ENDPOINT_ISP)
+
 # Identify keys to change/add
 for key in hamnetdb_dict:
     # if new or changed
     key_not_on_server = key not in rrsets_dict_on_server
     # add if not there
     if (key_not_on_server):
-        replace_count = replace_count + 1;
-        if replace_count <= REPLACE_MAX_COUNT:
-            to_change[key] = hamnetdb_dict[key]
+        to_change[key] = hamnetdb_dict[key]
     elif rrsets_dict_on_server[key] != hamnetdb_dict[key]:
-        replace_count = replace_count + 1;
-        if replace_count <= REPLACE_MAX_COUNT:
-            to_change[key] = hamnetdb_dict[key]
+        to_change[key] = hamnetdb_dict[key]
 
-print("\nKeys to be changed or added:", len(to_change))
-# print(to_change)
+print("Keys to be changed or added:", len(to_change))
 
-# Convert the dictionary into the RRset JSON structure
-rrsets_remove = [
-    {
-        "name": f"{key}",
-        "type": value.type,
-        "changetype": "DELETE"
-    }
-    for key, value in to_remove.items()
-]
-
-rrsets_change = [
-    {
-        "name": f"{key}",
-        "type": value.type,
-        "ttl": value.ttl,
-        "changetype": "REPLACE",
-        "records": [
-            {
-                "content": value.content,
-                "disabled": False
-            }
-        ]
-    }
-    for key, value in to_change.items()
-]
-
-# Create the payload
-rrset_remove_payload = {
-    "rrsets": rrsets_remove
-}
-# Create the payload
-rrset_change_payload = {
-    "rrsets": rrsets_change
-}
-
-# update header, here we need to specify the content type
-headers = {
-    'X-API-Key': api_key,
-    'Content-Type': 'application/json'
-}
-
-API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
-if len(to_remove) > 0:
-    request_patch(API_ENDPOINT, headers, rrset_remove_payload, 204)
-if len(to_change) > 0:
-    request_patch(API_ENDPOINT, headers, rrset_change_payload, 204)
+prepare_patch(to_change, False, API_ENDPOINT_ISP)
 
 # serial is updated automatically in some magic. this should enable the setting, it needs
 # to be done only once, not at every update
-UPDATE_SERIAL = False
+UPDATE_SERIAL = True
 
-if UPDATE_SERIAL:
-    # Update serial
-    payload = {
-        "soa_edit_api": "INCREASE",
-        "kind": "Native",
-        "soa_edit": "INCREASE"
-    }
 
-    API_ENDPOINT = API_ENDPOINT_BASE + "/v1/servers/localhost/zones/hamip.at"
-    response = requests.put(API_ENDPOINT, headers=headers, data=json.dumps(payload))
-
-    # Check the response status
-    if response.status_code == 204:
-        print("Zone updated successfully.")
-    else:
-        print(f"Failed to update zone. Status code: {response.status_code}")
-        print("Response:", response.text)
 
 if len(to_remove) > 0 or len(to_change) > 0:
     # getupdated zone
     response = requests.get(API_ENDPOINT, headers=headers)
-    print_response(response)
+    if DEBUG:
+        print_response(response)
