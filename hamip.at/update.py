@@ -15,6 +15,7 @@ HAMIP_AT = '.hamip.at.'
 
 DEBUG = False
 
+
 # import authkey from /etc/hamip/key.asc
 def read_auth_key(file_path):
     """
@@ -55,6 +56,17 @@ def print_response(response):
         print(response.text)
 
 
+def get_zone(endpoint):
+    # put the key into a request header
+    headers = {
+        'X-API-Key': api_key
+    }
+
+    ENDPOINT = endpoint + "/v1/servers/localhost/zones/hamip.at"
+    response = requests.get(ENDPOINT, headers=headers)
+    return response
+
+
 def request_patch(endpoint, headers, payload, status_code):
     # delete:
     # {'rrsets': [{'name': 'testing2.oe0any.hamip.at.', 'type': 'A', 'changetype': 'DELETE'}]}
@@ -77,16 +89,57 @@ def request_patch(endpoint, headers, payload, status_code):
     return response
 
 
-
 Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
 
-def get_current_zone(zone_id, endpoint, headers):
+
+def get_zones(api_endpoint):
+    # put the key into a request header
+    headers = {
+        'X-API-Key': api_key
+    }
+
+    zone_id = None
+    # Check if the server is alive
+    try:
+        full_end_point: str = api_endpoint + "/v1/servers/localhost/zones"
+        response = requests.get(full_end_point, headers=headers)
+        response_json = response.json()
+
+        # check if the 'url' key matches the expected value
+        expected_url = '/api/v1/servers/localhost/zones/hamip.at.'
+
+        # Iterate over all keys and look for the 'url' field
+        found_url = False
+        for key, value in response_json.items():
+            # Try to get the 'url' from the sub-dictionary
+            url = value.get('url')
+            if url and url == expected_url:
+                zone_id = key
+                found_url = True
+
+        if found_url:
+            print(f"Zone ID: {zone_id}")
+        else:
+            print(f"Key '{expected_url}' not found in the response")
+        return zone_id
+
+    except json.JSONDecodeError:
+        print("Failed to decode JSON response")
+        print(response.text)
+
+
+def get_current_zone(zone_id, api_endpoint):
     # Sample response:
     # 'tun-oe8xvr.ir3uda.hamip.at.': Resource_record(type='A', content='44.134.125.249', ttl=600)
 
+    # put the key into a request header
+    headers = {
+        'X-API-Key': api_key
+    }
+
     # current zone
-    API_ENDPOINT = API_ENDPOINT_ISP + "/v1/servers/localhost/zones/hamip.at"
-    response = requests.get(API_ENDPOINT, headers=headers)
+    full_end_point = api_endpoint + "/v1/servers/localhost/zones/hamip.at"
+    response = requests.get(full_end_point, headers=headers)
 
     # Sample record
     #               {'comments': [],
@@ -111,14 +164,21 @@ def get_current_zone(zone_id, endpoint, headers):
                 ttl = rrset.get('ttl')
                 rrsets_dict_on_server[name] = Resource_record(content=content, type=type, ttl=ttl)
 
-    print(f"Rrsets on server: {len(rrsets_dict_on_server)}")
+    print(f"Rrsets on {api_endpoint}: {len(rrsets_dict_on_server)}")
 
     if len(rrsets_dict_on_server) == 0:
         print("failed to get rr_sets from server")
         exit(-1)
     return (rrsets_dict_on_server)
 
-def update_serial():
+
+def update_serial(api_endpoint):
+
+    # put the key into a request header
+    headers = {
+        'X-API-Key': api_key
+    }
+
     # Update serial
     payload = {
         "soa_edit_api": "INCREASE",
@@ -126,8 +186,8 @@ def update_serial():
         "soa_edit": "INCREASE"
     }
 
-    API_ENDPOINT = API_ENDPOINT_ISP + "/v1/servers/localhost/zones/hamip.at"
-    response = requests.put(API_ENDPOINT, headers=headers, data=json.dumps(payload))
+    full_end_point = api_endpoint + "/v1/servers/localhost/zones/hamip.at"
+    response = requests.put(full_end_point, headers=headers, data=json.dumps(payload))
 
     # Check the response status
     if response.status_code == 204:
@@ -138,19 +198,17 @@ def update_serial():
 
 
 def prepare_patch(task, delete, api_endpoint):
-
     CHUNK_SIZE = 500
 
     # split into chunks
     items_list = list(task.items())
-    for i in range(0, len(items_list),CHUNK_SIZE):
+    for i in range(0, len(items_list), CHUNK_SIZE):
         # Create a dictionary chunk
         chunk = dict(items_list[i:i + CHUNK_SIZE])
         # Process the current chunk
 
-
         # Convert the dictionary into the RRset JSON structure
-        if  delete:
+        if delete:
             rrsets = [
                 {
                     "name": f"{key}",
@@ -176,7 +234,6 @@ def prepare_patch(task, delete, api_endpoint):
                 for key, value in chunk.items()
             ]
 
-
         # Create the payload
         rrset_payload = {
             "rrsets": rrsets
@@ -188,8 +245,8 @@ def prepare_patch(task, delete, api_endpoint):
             'Content-Type': 'application/json'
         }
 
-        ENDPOINT = api_endpoint + "/v1/servers/localhost/zones/hamip.at"
-        request_patch(ENDPOINT, headers, rrset_payload, 204)
+        full_end_point = api_endpoint + "/v1/servers/localhost/zones/hamip.at"
+        request_patch(full_end_point, headers, rrset_payload, 204)
 
 
 # Initialize dictionaries
@@ -203,54 +260,16 @@ if USE_DHCP:
     get_hamnetdb_dhcp(dhcp_dict, hamnetdb_dict, HAMIP_AT)
     hamnetdb_dict = hamnetdb_dict | dhcp_dict
 
-
 api_key = read_auth_key(API_KEY_ISP_LOCATION)
 if api_key is None:
     print(f"Error: Key not found at", API_KEY_ISP_LOCATION, "or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
 # print(api_key)
 
-# put the key into a request header
-headers = {
-    'X-API-Key': api_key
-}
-
-zone_id = None
-
-# Check if the server is alive
-try:
-    API_ENDPOINT: str = API_ENDPOINT_ISP + "/v1/servers/localhost/zones"
-    response = requests.get(API_ENDPOINT, headers=headers)
-    response_json = response.json()
-
-    # check if the 'url' key matches the expected value
-    expected_url = '/api/v1/servers/localhost/zones/hamip.at.'
-
-    # Iterate over all keys and look for the 'url' field
-    found_url = False
-    for key, value in response_json.items():
-        # Try to get the 'url' from the sub-dictionary
-        url = value.get('url')
-        if url and url == expected_url:
-            zone_id = key
-            found_url = True
-
-    if found_url:
-        print(f"Zone ID: {zone_id}")
-    else:
-        print(f"Key '{expected_url}' not found in the response")
-
-
-except json.JSONDecodeError:
-    print("Failed to decode JSON response")
-    print(response.text)
-
-# request to load data into rrset and get serial
+zone_id = get_zones(API_ENDPOINT_ISP)
 
 # getupdated zone
-API_ENDPOINT = API_ENDPOINT_ISP + "/v1/servers/localhost/zones/hamip.at"
-response = requests.get(API_ENDPOINT, headers=headers)
-
+response = get_zone(API_ENDPOINT_ISP)
 data = response.json()
 
 # Retrieve the serial number
@@ -272,10 +291,9 @@ if edited_serial == None:
     print_response(response)
     exit(1)
 
-rrsets_dict_on_server = get_current_zone(zone_id, API_ENDPOINT, headers)
+rrsets_dict_on_server = get_current_zone(zone_id, API_ENDPOINT_ISP)
 # print("rrsets_dict_on_server")
 # print(rrsets_dict_on_server)
-
 
 # compare hamnetdb_dict_name_ip and hamnetdb_dict_aliases_cname with rrsets_dict_on_server
 
@@ -305,7 +323,7 @@ for key in hamnetdb_dict:
     # if new or changed
     key_not_on_server = key not in rrsets_dict_on_server
     # add if not there
-    if (key_not_on_server):
+    if key_not_on_server:
         to_change[key] = hamnetdb_dict[key]
     elif rrsets_dict_on_server[key] != hamnetdb_dict[key]:
         to_change[key] = hamnetdb_dict[key]
@@ -314,14 +332,11 @@ print("Keys to be changed or added:", len(to_change))
 
 prepare_patch(to_change, False, API_ENDPOINT_ISP)
 
-# serial is updated automatically in some magic. this should enable the setting, it needs
-# to be done only once, not at every update
 UPDATE_SERIAL = True
+if UPDATE_SERIAL:
+    update_serial(API_ENDPOINT_ISP)
 
-
-
-if len(to_remove) > 0 or len(to_change) > 0:
+if len(to_remove) > 0 or len(to_change) > 0 and DEBUG:
     # getupdated zone
-    response = requests.get(API_ENDPOINT, headers=headers)
-    if DEBUG:
-        print_response(response)
+    get_zone(API_ENDPOINT_ISP)
+    print_response(response)
