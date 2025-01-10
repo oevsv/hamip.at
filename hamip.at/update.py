@@ -26,6 +26,7 @@ import time
 
 API_ENDPOINT_BASE = "https://dnsapi.netplanet.at/api"
 API_KEY_LOCATION = "/etc/hamip/key.asc"
+HAMIP_AT = '.hamip.at.'
 
 
 # import authkey from /etc/hamip/key.asc
@@ -86,7 +87,16 @@ def print_response(response):
 
 
 def request_patch(endpoint, headers, payload, status_code):
-    print(f"Patch payload: {payload}")
+    # delete:
+    # {'rrsets': [{'name': 'testing2.oe0any.hamip.at.', 'type': 'A', 'changetype': 'DELETE'}]}
+
+    # change:
+    # {'rrsets': [{'name': 'testing2.oe0any.hamip.at.', 'type': 'A', 'ttl': 600, 'changetype': 'REPLACE',
+    #            'records': [{'content': '44.143.0.7',     'disabled': False}]}]}
+    # {'rrsets': [{'name': 'hr.oe5xoo.hamip.at.',       'type': 'A', 'ttl': 600, 'changetype': 'REPLACE',
+    #            'records': [{'content': '44.143.108.254', 'disabled': False}]}
+
+    print(f"\nPatch payload: {payload}")
     response = requests.patch(endpoint, headers=headers, data=json.dumps(payload))
     # Check the response
     if response.status_code != status_code:
@@ -189,6 +199,7 @@ def get_hamnetdb_dhcp(dhcp_dict):
 
 Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
 
+
 def get_hamnetdb_hosts(hamnet_dict):
     # Endpoint for HamnetDB
     HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
@@ -230,39 +241,65 @@ def get_hamnetdb_hosts(hamnet_dict):
         entries = [entry for entry in entries if entry.get('site', '').startswith('oe')]
         print("HamnetDB-size, OE filtered:", len(entries))
 
-
+        site_list = []
         # Iterate over each entry
         for entry in entries:
             site = entry.get("site")
-            name = entry.get("name")
+            if site not in site_list:
+                site_list.append(site)
+            host_name = entry.get("name")+HAMIP_AT
+
             ip = entry.get("ip")
             deleted = entry.get("deleted")
             if deleted == 0:
                 # Add name and IP to name_ip_dict
 
-                if name and ip and name not in hamnet_dict:
-                    hamnet_dict[name] = Resource_record(content=ip, type="A", ttl=600)
+                if host_name and ip and host_name not in hamnet_dict:
+                    hamnet_dict[host_name] = Resource_record(content=ip, type="A", ttl=600)
+                    if host_name.endswith('.oe0any.hamip.at.'):
+                        special_host = host_name.replace(".oe0any", "")
+                        if special_host not in hamnet_dict:
+                            hamnet_dict[special_host] = Resource_record(content=ip, type="A", ttl=600)
+
                 # Add aliases and IP to aliases_ip_dict
                 aliases = entry.get("aliases", "")
                 if aliases:
                     for alias in aliases.split(','):
-                        alias_strip = alias.strip()
-                        if alias_strip != name and alias_strip not in hamnet_dict:
-                            hamnet_dict[alias_strip] = Resource_record(content=name, type="CNAME", ttl=600)
+                        alias_host_name = alias.strip() + HAMIP_AT
+                        if alias_host_name != host_name and alias_host_name not in hamnet_dict:
+                            hamnet_dict[alias_host_name] = Resource_record(content=host_name, type="CNAME", ttl=600)
+                            #if alias_host_name.endswith('.oe0any.hamip.at.'):
+                            #    special_host = host_name.replace(".oe0any", "")
+                            #    if special_host not in hamnet_dict:
+                            #        hamnet_dict[special_host] = Resource_record(content=host_name, type="CNAME", ttl=600)
+                            # news-global.oe1xqu.hamip.at => news.hamip.at
+                            # print(f"got alias {alias_host_name} with site {site}")
+                            if alias_host_name.endswith('-global.'+site+'.hamip.at.'):
+                                # print("found")
+                                special_host = alias_host_name.replace('-global.'+site+'.hamip.at.', "") + HAMIP_AT
+                                # print(f"special host {special_host}")
+                                if special_host not in hamnet_dict:
+                                    hamnet_dict[special_host] = Resource_record(content=host_name, type="CNAME", ttl=600)
 
         start_time = time.time()
 
-        # New iteration to add entries to add sites hot having a record
-        for entry in entries:
-            site = entry.get("site")
-            if site not in hamnet_dict:
-                if "www."+site in hamnet_dict or "www." + site in hamnet_dict or "router." + site in hamnet_dict:
-                    hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
+        site_list.sort()
+        for site in site_list:
+            site_domain = site + HAMIP_AT
+            if site_domain not in hamnetdb_dict:
+                if "www." + site_domain in hamnet_dict and hamnet_dict["www." + site_domain].type == 'A':
+                    hamnet_dict[site_domain] = Resource_record(content="www." + site_domain, type="CNAME", ttl=600)
+                elif "web." + site_domain in hamnet_dict and hamnet_dict["web." + site_domain].type == 'A':
+                    hamnet_dict[site_domain] = Resource_record(content="web." + site_domain, type="CNAME", ttl=600)
+                elif "bb." + site_domain in hamnet_dict and hamnet_dict["bb." + site_domain].type == 'A':
+                    hamnet_dict[site_domain] = Resource_record(content="bb." + site_domain, type="CNAME", ttl=600)
+                elif "router." + site_domain in hamnet_dict and hamnet_dict["router." + site_domain].type == 'A':
+                    hamnet_dict[site_domain] = Resource_record(content="router." + site_domain, type="CNAME", ttl=600)
                 else:
                     # fallback to any other prefix (e.g. bb.<site>)
                     for name, record in hamnet_dict.items():
-                        if name.endswith("." + site):
-                            hamnet_dict[site] = Resource_record(content=name, type="CNAME", ttl=600)
+                        if name.endswith("." + site_domain):
+                            hamnet_dict[site_domain] = Resource_record(content=name, type="CNAME", ttl=600)
                             break
 
         end_time = time.time()
@@ -311,7 +348,6 @@ def get_current_zone(zone_id, endpoint, headers):
                 content = record.get('content')
                 ttl = rrset.get('ttl')
                 rrsets_dict_on_server[name] = Resource_record(content=content, type=type, ttl=ttl)
-
 
     print(f"Rrsets on server: {len(rrsets_dict_on_server)}")
 
@@ -409,28 +445,38 @@ to_change = {}
 
 static_dict = {
     "*": Resource_record(content="89.185.96.125", type="A", ttl=600),
-    "hamip.at.": Resource_record(content="89.185.96.125",type="A", ttl=600)
+    "hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600)
 }
 
 # Identify keys to remove (present in old_dict but not in new_dict)
+# intruduce limit to avoid too complex requests
+DELETE_MAX_COUNT = 10000
+delete_count = 0
 for key in rrsets_dict_on_server:
     if (key not in hamnetdb_dict
             and key not in static_dict):
-        to_remove[key] = rrsets_dict_on_server[key]
+        delete_count = delete_count + 1
+        if delete_count <= DELETE_MAX_COUNT:
+            to_remove[key] = rrsets_dict_on_server[key]
 
 print("Keys to be removed:", len(to_remove))
 # print(to_remove)
 
+REPLACE_MAX_COUNT = 10000
+replace_count = 0
 # Identify keys to change/add
 for key in hamnetdb_dict:
     # if new or changed
     key_not_on_server = key not in rrsets_dict_on_server
     # add if not there
     if (key_not_on_server):
-        to_change[key] = hamnetdb_dict[key]
+        replace_count = replace_count + 1;
+        if replace_count <= REPLACE_MAX_COUNT:
+            to_change[key] = hamnetdb_dict[key]
     elif rrsets_dict_on_server[key] != hamnetdb_dict[key]:
-        to_change[key] = hamnetdb_dict[key]
-
+        replace_count = replace_count + 1;
+        if replace_count <= REPLACE_MAX_COUNT:
+            to_change[key] = hamnetdb_dict[key]
 
 print("\nKeys to be changed or added:", len(to_change))
 # print(to_change)
