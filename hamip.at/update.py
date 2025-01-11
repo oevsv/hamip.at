@@ -1,9 +1,10 @@
 #!/usr/bin/python3
 from datetime import datetime
-import os, sys, time
+import os, sys, yaml
 from pprint import pprint
 from hamnetdb_util import *
 from powerdns_util import *
+
 
 # https://doc.powerdns.com/authoritative/http-api/zone.html
 
@@ -13,19 +14,7 @@ API_ENDPOINT_HAMNET = "http://127.0.0.1:8081/api"
 API_KEY_HAMNET_LOCATION = "/etc/hamip/key_hamnet.asc"
 HAMIP_AT = '.hamip.at.'
 
-static_dict_isp = {
-    "*.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
-    "www.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
-    "hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
-    "ns.hamip.at.": Resource_record(content="89.185.96.125", type="A", ttl=600),
-}
-
-static_dict_hamnet = {
-    "*.hamip.at.": Resource_record(content="44.143.8.131", type="A", ttl=600),
-    "www.hamip.at.": Resource_record(content="44.143.8.131", type="A", ttl=600),
-    "hamip.at.": Resource_record(content="44.143.8.131", type="A", ttl=600),
-    "ns.hamip.at.": Resource_record(content="44.143.0.10", type="A", ttl=600),
-}
+STATIC_ZONES_LOCATION = "static_records.yaml"
 
 DEBUG = False
 
@@ -59,6 +48,23 @@ def read_auth_key(file_path):
         print(f"debug, an error occurred: {e}")
         return None
 
+def get_static_zones(file_path):
+
+    Resource_record = namedtuple("Resource_record", ["content", "type", "ttl"])
+
+    try:
+        # Load dictionaries from YAML file
+        with open(file_path, 'r') as file:
+            data = yaml.load(file, Loader=yaml.FullLoader)
+
+        static_dict_isp = {k: Resource_record(**v) for k, v in data['isp'].items()}
+        static_dict_hamnet = {k: Resource_record(**v) for k, v in data['hamnet'].items()}
+
+        return static_dict_isp, static_dict_hamnet
+    except Exception as e:
+        # Catch exception if file operations failed (e.g. lack of permissions)
+        print(f"debug, an error occurred: {e}")
+        return None, None
 
 def print_response(response):
     # make response more readable
@@ -115,7 +121,7 @@ def prepare_patch(task, delete, api_endpoint, api_key):
         request_patch(api_endpoint, rrset_payload, 204, api_key)
 
 
-def process_powerdns(api_endpoint, api_key, is_hamnet):
+def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
     zone_id = get_zones(api_endpoint, api_key)
 
     response = get_zone(api_endpoint, api_key)
@@ -156,6 +162,8 @@ def process_powerdns(api_endpoint, api_key, is_hamnet):
     tag_dict = {
         "timestamp.hamip.at.": Resource_record(content="\"" + formatted_date_time + "\"", type="TXT", ttl=60),
     }
+
+    static_dict_isp,static_dict_hamnet = get_static_zones(static_zones_path)
 
     if is_hamnet:
         reference_dict = (hamnetdb_dict | static_dict_hamnet | tag_dict)
@@ -219,5 +227,5 @@ if api_key_hamnet is None:
     print(f"Error: Key not found at", API_KEY_HAMNET_LOCATION, "or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
 
-process_powerdns(api_endpoint, api_key_isp, False)
-process_powerdns(API_ENDPOINT_HAMNET, api_key_hamnet, True)
+process_powerdns(api_endpoint, api_key_isp, False,STATIC_ZONES_LOCATION)
+process_powerdns(API_ENDPOINT_HAMNET, api_key_hamnet, True,STATIC_ZONES_LOCATION)
