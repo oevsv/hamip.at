@@ -1,0 +1,34 @@
+isp:
+  "*.hamip.at.":
+    content: "89.185.96.125"
+    type: "A"
+    ttl: 600
+  "www.hamip.at.":
+    content: "89.185.96.125"
+    type: "A"
+    ttl: 600
+  "hamip.at.":
+    content: "89.185.96.125"
+    type: "A"
+    ttl: 600
+  "ns.hamip.at.":
+    content: "89.185.96.125"
+    type: "A"
+    ttl: 600
+hamnet:
+  "*.hamip.at.":
+    content: "44.143.8.131"
+    type: "A"
+    ttl: 600
+  "www.hamip.at.":
+    content: "44.143.8.131"
+    type: "A"
+    ttl: 600
+  "hamip.at.":
+    content: "44.143.8.131"
+    type: "A"
+    ttl: 600
+  "ns.hamip.at.":
+    content: "44.143.0.10"
+    type: "A"
+    ttl: 600
