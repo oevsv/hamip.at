@@ -125,6 +125,8 @@ def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
     zone_id = get_zones(api_endpoint, api_key)
 
     response = get_zone(api_endpoint, api_key)
+    # debug: print full zone response
+    # print_response(response)
     data = response.json()
 
     # Retrieve the serial number
@@ -172,7 +174,7 @@ def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
     # Process removal
 
     for key in rrsets_dict_on_server:
-        if key not in reference_dict:
+        if key not in reference_dict or rrsets_dict_on_server[key] != reference_dict[key]:
             to_remove[key] = rrsets_dict_on_server[key]
 
     print("Keys to be removed:", len(to_remove))
