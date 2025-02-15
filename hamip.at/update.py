@@ -14,7 +14,7 @@ API_ENDPOINT_HAMNET = "http://127.0.0.1:8081/api"
 API_KEY_HAMNET_LOCATION = "/etc/hamip/key_hamnet.asc"
 HAMIP_AT = '.hamip.at.'
 
-STATIC_ZONES_LOCATION = "static_records.yaml"
+STATIC_ZONES_LOCATION = "/etc/hamip/static_records.yaml"
 
 DEBUG = False
 
