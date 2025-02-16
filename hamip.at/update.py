@@ -1,7 +1,15 @@
 #!/usr/bin/python3
+
+# Update hamip.at according to HamnetDB and local settings
+
+# This code is released under the Apache License, Version 2.0.
+# It was developed by Dietmar Zlabinger, oe3dzw
+
 from datetime import datetime
 import os, sys, yaml
 from pprint import pprint
+from collections import namedtuple
+
 from hamnetdb_util import *
 from powerdns_util import *
 
@@ -50,21 +58,39 @@ def read_auth_key(file_path):
 
 def get_static_zones(file_path):
 
-    Resource_record = namedtuple("Resource_record", ["content", "type", "ttl"])
+    Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
+
+    static_dict_isp = {}
+    static_dict_hamnet = {}
 
     try:
         # Load dictionaries from YAML file
         with open(file_path, 'r') as file:
-            data = yaml.load(file, Loader=yaml.FullLoader)
+            data = yaml.safe_load(file)
 
-        static_dict_isp = {k: Resource_record(**v) for k, v in data['isp'].items()}
-        static_dict_hamnet = {k: Resource_record(**v) for k, v in data['hamnet'].items()}
+        # validate yaml
+        static_dict_isp = {}
+        for k, v in data['isp'].items():
+            # Explicitly map fields to ensure correct order
+            static_dict_isp[k] = Resource_record(
+                type=v['type'],
+                content=v['content'],
+                ttl=v['ttl']
+            )
+
+        static_dict_hamnet = {}
+        for k, v in data['hamnet'].items():
+            static_dict_hamnet[k] = Resource_record(
+                type=v['type'],
+                content=v['content'],
+                ttl=v['ttl']
+            )
 
         return static_dict_isp, static_dict_hamnet
     except Exception as e:
         # Catch exception if file operations failed (e.g. lack of permissions)
-        print(f"debug, an error occurred: {e}")
-        return None, None
+        print(f"Error loading static zones: {e}")
+        return {}, {}  # Return empty dicts
 
 def print_response(response):
     # make response more readable
@@ -122,9 +148,17 @@ def prepare_patch(task, delete, api_endpoint, api_key):
 
 
 def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
+
+    if DEBUG:
+        print(f"is_hamnet = {is_hamnet}")
+
     zone_id = get_zones(api_endpoint, api_key)
 
     response = get_zone(api_endpoint, api_key)
+    if not response.ok:
+        print(f"Error fetching zone: {response.status_code}")
+        print_response(response)
+        sys.exit(1)
     # debug: print full zone response
     # print_response(response)
     data = response.json()
@@ -136,7 +170,7 @@ def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
     if serial == None:
         print("No serial,failed")
         print_response(response)
-        exit(-1)
+        exit(1)
 
     # Retrieve the serial number
     edited_serial = data.get('edited_serial', None)
@@ -166,6 +200,9 @@ def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
     }
 
     static_dict_isp,static_dict_hamnet = get_static_zones(static_zones_path)
+    # Default to empty dicts if loading failed
+    static_dict_isp = static_dict_isp or {}
+    static_dict_hamnet = static_dict_hamnet or {}
 
     if is_hamnet:
         reference_dict = (hamnetdb_dict | static_dict_hamnet | tag_dict)
@@ -175,10 +212,15 @@ def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
 
     for key in rrsets_dict_on_server:
         if key not in reference_dict or rrsets_dict_on_server[key] != reference_dict[key]:
+            if DEBUG:
+                print("Mismatch:")
+                print(f"on server: {rrsets_dict_on_server[key]}")
+                print(f"reference: {reference_dict[key]}")
             to_remove[key] = rrsets_dict_on_server[key]
 
     print("Keys to be removed:", len(to_remove))
-    # print(to_remove)
+    if DEBUG:
+        print(to_remove)
 
     prepare_patch(to_remove, True, api_endpoint, api_key)
 
@@ -193,6 +235,8 @@ def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
             to_change[key] = reference_dict[key]
 
     print("Keys to be changed or added:", len(to_change))
+    if DEBUG:
+        print(to_change)
 
     prepare_patch(to_change, False, api_endpoint, api_key)
 
@@ -200,9 +244,9 @@ def process_powerdns(api_endpoint, api_key, is_hamnet,static_zones_path):
     if ENABLE_UPDATE_SERIAL:
         update_serial(api_endpoint, api_key)
 
-    if len(to_remove) > 0 or len(to_change) > 0 and DEBUG:
+    if (len(to_remove) > 0 or len(to_change) > 0) and DEBUG:
         # getupdated zone
-        get_zone(api_endpoint, api_key)
+        # get_zone(api_endpoint, api_key)
         print_response(response)
 
 
