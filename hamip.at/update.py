@@ -150,8 +150,6 @@ def process_powerdns(endpoint, api_key, is_hamnet, static_zones_path):
     if DEBUG:
         print(f"is_hamnet = {is_hamnet}")
 
-    zone_id = get_zones(endpoint, api_key)
-
     response = get_zone(endpoint, api_key)
     if not response.ok:
         print(f"Error fetching zone: {response.status_code}")
@@ -180,7 +178,7 @@ def process_powerdns(endpoint, api_key, is_hamnet, static_zones_path):
         print_response(response)
         exit(1)
 
-    rrsets_dict_on_server = get_current_zone(zone_id, endpoint, api_key)
+    rrsets_dict_on_server = get_current_zone(endpoint, api_key)
     # print("rrsets_dict_on_server")
     # print(rrsets_dict_on_server)
 

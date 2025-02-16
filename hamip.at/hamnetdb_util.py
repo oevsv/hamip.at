@@ -1,7 +1,6 @@
 # hamnetdb_util.py
 import ipaddress
 import json
-import re
 import time
 from collections import namedtuple
 
@@ -11,9 +10,11 @@ import requests
 
 
 Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
+
+
 def get_hamnetdb_hosts(hamnet_dict, hamip_at):
     # Endpoint for HamnetDB
-    HAMNETDB_ENDPOINT = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
+    hamnetdb_endpoint = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
 
     # Example response:
     # {
@@ -28,7 +29,8 @@ def get_hamnetdb_hosts(hamnet_dict, hamip_at):
     #     "rawip": 747584578,
     #     "site": "oe3xnr",
     #     "id": 14448,
-    #     "aliases": "www.oe3xnr,aprs.oe3xnr,index.oe3xnr,web.oe3xzr,admin.oe3xnr,shack.oe3xnr,aprs.oe3xnr,cam.oe3xnr,cam.oe3xhr,search.oe3xnr,file.oe3xnr,search.oe3xnr",
+    #     "aliases": "www.oe3xnr,aprs.oe3xnr,index.oe3xnr,web.oe3xzr,admin.oe3xnr,shack.oe3xnr,aprs.oe3xnr,cam.oe3xnr,
+    #         cam.oe3xhr,search.oe3xnr,file.oe3xnr,search.oe3xnr",
     #     "maintainer": "",
     #     "rw_maint": 0,
     #     "name": "web.oe3xnr",
@@ -41,7 +43,7 @@ def get_hamnetdb_hosts(hamnet_dict, hamip_at):
     DEBUG = False
 
     try:
-        response = requests.get(HAMNETDB_ENDPOINT)
+        response = requests.get(hamnetdb_endpoint)
         response.raise_for_status()  # Raise an exception for HTTP errors
     except requests.exceptions.RequestException as e:
         if DEBUG:
@@ -83,18 +85,13 @@ def get_hamnetdb_hosts(hamnet_dict, hamip_at):
                         alias_host_name = alias.strip() + hamip_at
                         if alias_host_name != host_name and alias_host_name not in hamnet_dict:
                             hamnet_dict[alias_host_name] = Resource_record(content=host_name, type="CNAME", ttl=600)
-                            #if alias_host_name.endswith('.oe0any.hamip.at.'):
-                            #    special_host = host_name.replace(".oe0any", "")
-                            #    if special_host not in hamnet_dict:
-                            #        hamnet_dict[special_host] = Resource_record(content=host_name, type="CNAME", ttl=600)
-                            # news-global.oe1xqu.hamip.at => news.hamip.at
-                            # print(f"got alias {alias_host_name} with site {site}")
                             if alias_host_name.endswith('-global.'+site+'.hamip.at.'):
                                 # print("found")
                                 special_host = alias_host_name.replace('-global.'+site+'.hamip.at.', "") + hamip_at
                                 # print(f"special host {special_host}")
                                 if special_host not in hamnet_dict:
-                                    hamnet_dict[special_host] = Resource_record(content=host_name, type="CNAME", ttl=600)
+                                    hamnet_dict[special_host] = Resource_record(content=host_name, type="CNAME",
+                                                                                ttl=600)
 
         site_list.sort()
         for site in site_list:
@@ -218,7 +215,8 @@ def get_hamnetdb_dhcp(dhcp_dict, hosts_dict, hamip_at):
                     break
 
             if suffix_found:
-            # Generate the dictionary entries
+
+                # Generate the dictionary entries
                 for i in range(range_start, range_end + 1):
                     octets = base_ip.split('.')
                     octets[3] = str(i)  # Replace the last octet with each number in the range
@@ -234,7 +232,6 @@ def get_hamnetdb_dhcp(dhcp_dict, hosts_dict, hamip_at):
     # print(dhcp_dict)
 
 
-
 def main():
     HAMIP_AT = '.hamip.at.'
 
@@ -247,16 +244,16 @@ def main():
     elapsed_time = end_time - start_time
     print(f"Function execution time: {elapsed_time:.6f} seconds")
 
-
     dhcp_dict = {}
     start_time = time.time()
     get_hamnetdb_dhcp(dhcp_dict, hosts_dict, HAMIP_AT)
-    #for key in dhcp_dict:
+    # for key in dhcp_dict:
     #    print(f"{key}: {dhcp_dict[key]}")
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"Size of dhcp_dict: {len(dhcp_dict)}")
     print(f"Function execution time: {elapsed_time:.6f} seconds")
+
 
 # only execute main if not imported
 if __name__ == "__main__":
