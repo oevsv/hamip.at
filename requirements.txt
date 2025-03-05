@@ -1,0 +1,2 @@
+dnspython3
+dnspython~=1.15.0
