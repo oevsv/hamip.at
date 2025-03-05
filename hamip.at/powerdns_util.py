@@ -5,14 +5,15 @@ import requests
 
 DEBUG = False
 
-def get_zone(endpoint,api_key):
+
+def get_zone(endpoint, api_key):
     # put the key into a request header
     headers = {
         'X-API-Key': api_key
     }
 
-    ENDPOINT = endpoint + "/v1/servers/localhost/zones/hamip.at"
-    response = requests.get(ENDPOINT, headers=headers)
+    full_endpoint = endpoint + "/v1/servers/localhost/zones/hamip.at"
+    response = requests.get(full_endpoint, headers=headers)
     return response
 
 
@@ -50,7 +51,7 @@ def request_patch(api_endpoint, payload, status_code, api_key):
 Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
 
 
-def get_zones(api_endpoint,api_key):
+def get_zones(api_endpoint, api_key):
     # put the key into a request header
     headers = {
         'X-API-Key': api_key
@@ -79,8 +80,7 @@ def get_zones(api_endpoint,api_key):
         #   'last_check': 0, 'masters': [], 'name': 'hamip.at.', 'notified_serial': 0, 'serial': 1,
         #   'url': '/api/v1/servers/localhost/zones/hamip.at.'}]
 
-
-        print (response_json)
+        print(response_json)
         if isinstance(response_json, dict):
             for key, value in response_json.items():
                 # Try to get the 'url' from the sub-dictionary
@@ -102,12 +102,11 @@ def get_zones(api_endpoint,api_key):
             print(f"Key '{expected_url}' not found in the response")
         return zone_id
 
-    except json.JSONDecodeError:
-        print("Failed to decode JSON response")
-        print(response.text)
+    except json.JSONDecodeError as e:
+        print(f"Failed to decode JSON response, error {e}")
 
 
-def get_current_zone(zone_id, api_endpoint,api_key):
+def get_current_zone(api_endpoint, api_key):
     # Sample response:
     # 'tun-oe8xvr.ir3uda.hamip.at.': Resource_record(type='A', content='44.134.125.249', ttl=600)
 
@@ -129,29 +128,28 @@ def get_current_zone(zone_id, api_endpoint,api_key):
 
     # Parse the JSON data
     data = response.json()
-    zone_data = data.get(zone_id, {})
 
     # Retrieve only the relevant information from rrsets
     rrsets_dict_on_server = {}
     for rrset in data.get('rrsets', []):
         name = rrset.get('name')
-        type = rrset.get('type')
+        rrtype = rrset.get('type')
         for record in rrset.get('records', []):
             # Include specific record types
-            if type == 'A' or type == 'CNAME' or type == 'TXT':
+            if rrtype == 'A' or rrtype == 'CNAME' or rrtype == 'TXT':
                 content = record.get('content')
                 ttl = rrset.get('ttl')
-                rrsets_dict_on_server[name] = Resource_record(content=content, type=type, ttl=ttl)
+                rrsets_dict_on_server[name] = Resource_record(content=content, type=rrtype, ttl=ttl)
 
     print(f"Rrsets on {api_endpoint}: {len(rrsets_dict_on_server)}")
 
     if len(rrsets_dict_on_server) == 0:
         print("failed to get rr_sets from server")
-        exit(-1)
-    return (rrsets_dict_on_server)
+        exit(1)
+    return rrsets_dict_on_server
 
 
-def update_serial(api_endpoint,api_key):
+def update_serial(api_endpoint, api_key):
 
     # put the key into a request header
     headers = {
