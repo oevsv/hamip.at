@@ -16,6 +16,9 @@ def get_hamnetdb_hosts(hamnet_dict, hamip_at):
     # Endpoint for HamnetDB
     hamnetdb_endpoint = "https://hamnetdb.net/csv.cgi?tab=host&json=1"
 
+    # Note: The hamnet-db forsaw "dns_add" in the AS table. This option is no longer used, thus also
+    # not implemented for hamip.at
+
     # Example response:
     # {
     #     "ip": "44.143.60.66",
