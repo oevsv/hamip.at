@@ -1,2 +1,3 @@
-dnspython3
-dnspython~=1.15.0
+requests
+PyYAML
+dnspython>=2.0

@@ -166,7 +166,7 @@ def process_powerdns(endpoint, api_key, is_hamnet, static_zones_path):
     if serial is None:
         print("No serial,failed")
         print_response(response)
-        exit(1)
+        sys.exit(1)
 
     # Retrieve the serial number
     edited_serial = data.get('edited_serial', None)
@@ -176,7 +176,7 @@ def process_powerdns(endpoint, api_key, is_hamnet, static_zones_path):
     if edited_serial is None:
         print("No edited_serial,failed")
         print_response(response)
-        exit(1)
+        sys.exit(1)
 
     rrsets_dict_on_server = get_current_zone(endpoint, api_key)
     # print("rrsets_dict_on_server")
@@ -261,12 +261,12 @@ if USE_DHCP:
 
 api_key_isp = read_auth_key(API_KEY_ISP_LOCATION)
 if api_key_isp is None:
-    print(f"Error: Key not found at", API_KEY_ISP_LOCATION, "or could not be read.")
+    print(f"Error: Key not found at {API_KEY_ISP_LOCATION} or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
 
 api_key_hamnet = read_auth_key(API_KEY_HAMNET_LOCATION)
 if api_key_hamnet is None:
-    print(f"Error: Key not found at", API_KEY_HAMNET_LOCATION, "or could not be read.")
+    print(f"Error: Key not found at {API_KEY_HAMNET_LOCATION} or could not be read.")
     sys.exit(1)  # Exit with a non-zero status code
 
 process_powerdns(api_endpoint, api_key_isp, False, STATIC_ZONES_LOCATION)

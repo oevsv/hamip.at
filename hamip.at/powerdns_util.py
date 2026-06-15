@@ -1,7 +1,9 @@
 import json
-from collections import namedtuple
+import sys
 
 import requests
+
+from hamnetdb_util import Resource_record
 
 DEBUG = False
 
@@ -46,9 +48,6 @@ def request_patch(api_endpoint, payload, status_code, api_key):
         print("Payload:", payload)
         raise NameError("Failed to patch.")
     return response
-
-
-Resource_record = namedtuple("Resource_record", ["type", "content", "ttl"])
 
 
 def get_zones(api_endpoint, api_key):
@@ -145,7 +144,7 @@ def get_current_zone(api_endpoint, api_key):
 
     if len(rrsets_dict_on_server) == 0:
         print("failed to get rr_sets from server")
-        exit(1)
+        sys.exit(1)
     return rrsets_dict_on_server
 
 
