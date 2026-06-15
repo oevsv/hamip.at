@@ -6,16 +6,20 @@
 import re
 
 def extract_ip_and_domain(input_string):
-    # Define a regex pattern to match the specific format
-    pattern = r"(\d{3})-(\d{3})-(\d{3})-(\d{3})-inetip\.([\w.-]+)"
+    # Define a regex pattern to match the specific format.
+    # Each octet may be 1 to 3 digits (zero-padded or not).
+    pattern = r"(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})-inetip\.([\w.-]+)"
 
     # Use re.search to find the first occurrence of the pattern
     match = re.search(pattern, input_string)
 
     if match:
-        # Extract the IP parts and the domain
-        ip_parts = match.groups()[:4]
-        ip_address = '.'.join(ip_parts)
+        # Extract the IP parts and normalize them (strip leading zeros,
+        # validate the 0-255 range) into a canonical dotted-quad address.
+        ip_parts = [int(octet) for octet in match.groups()[:4]]
+        if any(octet > 255 for octet in ip_parts):
+            return None, None
+        ip_address = '.'.join(str(octet) for octet in ip_parts)
         domain = match.group(5)
         return ip_address, domain
     else:
