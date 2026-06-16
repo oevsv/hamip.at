@@ -1,15 +1,15 @@
 # Architecture
 
-This document describes the scripts that build and maintain the **hamip.at** DNS
-zone, and records known issues / findings from a code review.
+This document describes the `hamipat` package that builds and maintains the
+**hamip.at** DNS zone.
 
 ## Overview
 
 The `hamip.at` zone maps Austrian amateur-radio (HamNet) host names to IP
-addresses. The source of truth is [HamnetDB](https://hamnetdb.net/); a set of
-Python scripts pull the Austrian (`oe*`) data from HamnetDB, merge in locally
-maintained static records, and push the result into two independent PowerDNS
-instances via the [PowerDNS HTTP API](https://doc.powerdns.com/authoritative/http-api/):
+addresses. The source of truth is [HamnetDB](https://hamnetdb.net/); the package
+pulls the Austrian (`oe*`) data from HamnetDB, merges in locally maintained
+static records, and pushes the result into two independent PowerDNS instances via
+the [PowerDNS HTTP API](https://doc.powerdns.com/authoritative/http-api/):
 
 - a **public Internet** zone, served by an ISP (netplanet) running PowerDNS, and
 - a **HamNet "intranet"** zone, served by a local PowerDNS master and distributed
@@ -21,95 +21,119 @@ identical so a dual-homed user does not depend on the HamNet zone.
 ```
 HamnetDB (csv.cgi JSON API)
         |
-        |  hamnetdb_util.py  (fetch hosts + DHCP, build records)
+        |  HamnetDbClient        (fetch hosts + DHCP, build records)
         v
-   in-memory record dict  +  static_records.yaml
+   RecordMap (FQDN -> ResourceRecord)  +  static_records.yaml  +  timestamp TXT
         |
-        |  update.py  (diff against live zone)
+        |  ZoneUpdater           (diff reference against live zone)
         v
-  powerdns_util.py  (PATCH/PUT via PowerDNS HTTP API)
+   PowerDnsClient               (PATCH/PUT via PowerDNS HTTP API)
         |
         +--> public zone   (ISP PowerDNS)
         +--> HamNet zone   (local PowerDNS -> AnyCast/AXFR)
+
+   cli.run() wires the above together for each Target.
 ```
 
-## Scripts
+## Design
 
-All scripts live in `hamip.at/`.
+The code is a small Python package, `hamipat/`, organised by responsibility.
+Two design choices make it easy to test and extend:
 
-### `update.py` — main entry point
+- **`ResourceRecord` is a frozen dataclass value object** (`records.py`). The
+  whole zone is a `RecordMap` (`Dict[str, ResourceRecord]`), and records compare
+  by value — which is exactly what the zone diff relies on.
+- **The HTTP clients are objects with an injectable `session`.** `HamnetDbClient`
+  and `PowerDnsClient` default to the `requests` module but accept any object
+  exposing `.get`/`.patch`/`.put`, so the data-shaping and diff logic is unit
+  tested without network access.
 
-Orchestrates the whole update. It:
+### Package layout (`hamipat/`)
 
-1. Builds the desired record set from HamnetDB (`get_hamnetdb_hosts`, optionally
-   `get_hamnetdb_dhcp`).
-2. Reads the PowerDNS API keys from `/etc/hamip/key.asc` (ISP) and
-   `/etc/hamip/key_hamnet.asc` (HamNet).
-3. Loads locally maintained static records from
-   `/etc/hamip/static_records.yaml` (separate `isp` and `hamnet` sections).
-4. Adds a `timestamp.hamip.at.` TXT record so every run bumps the zone serial.
-5. For each target (ISP, then HamNet): fetches the current zone, diffs it against
-   the desired record set, and applies the differences as chunked PATCH requests
-   (deletes first, then changes/additions), finally incrementing the SOA serial.
+| Module | Responsibility |
+| --- | --- |
+| `records.py` | `ResourceRecord` value object and the `RecordMap` type alias. |
+| `config.py` | Constants (endpoints, URLs, paths), the `Target` dataclass, and `read_api_key()`. |
+| `hamnetdb.py` | `HamnetDbClient` — fetch HamnetDB data and build the desired record set. |
+| `powerdns.py` | `PowerDnsClient` — read/patch a PowerDNS zone; `PowerDnsError`. |
+| `static_records.py` | `load_static_records()` — read the `isp`/`hamnet` YAML sections. |
+| `updater.py` | `ZoneUpdater` — diff a desired `RecordMap` against the live zone and apply it. |
+| `cli.py` | `run()` / `main()` — orchestrate an update across all `Target`s. |
+| `pubip.py` | `extract_ip_and_domain()` — parse a public IP embedded in a name (prototype). |
+| `zone_reader.py` | `load_dns_zone()` — read a zone over AXFR (diagnostics). |
+| `__main__.py` | Enables `python -m hamipat`. |
 
-Key constants (endpoints, key paths, static-records path) are defined at the top
-of the file. `DEBUG` enables verbose output.
+### `HamnetDbClient` (`hamnetdb.py`)
 
-### `hamnetdb_util.py` — HamnetDB data source
+Fetches and transforms HamnetDB data into a `RecordMap`:
 
-Fetches and transforms HamnetDB data into a dict of
-`Resource_record(type, content, ttl)` keyed by FQDN:
-
-- `get_hamnetdb_hosts()` — pulls the `host` table, filters to Austrian sites
-  (`site` starting with `oe`), and creates:
+- `fetch_hosts()` — pulls the `host` table, filters to Austrian sites (`site`
+  starting with `oe`), and creates:
   - `A` records for each host name,
   - `CNAME` records for each alias,
   - special handling for `*.oe0any.*` and `*-global.<site>.*` names,
   - a per-site `CNAME` (e.g. `oe3xnr.hamip.at.`) pointing at a sensible target
     (`www.`/`web.`/`bb.`/`router.` host, or any other host under the site).
-- `get_hamnetdb_dhcp()` — pulls the `subnet` table and expands each subnet's
-  `dhcp_range` into individual `dhcp-<ip>.<site>` A records. (Disabled by default
-  via `USE_DHCP = False` in `update.py`.)
+- `fetch_dhcp(hosts)` — pulls the `subnet` table and expands each subnet's
+  `dhcp_range` into individual `dhcp-<ip>.<site>` A records, deriving the site
+  suffix from `hosts`. (Disabled by default via `USE_DHCP = False` in `config.py`.)
 
-Running this module directly executes a small benchmark via `main()`.
+A network failure now propagates (rather than silently yielding an empty record
+set), so a fetch error aborts the run instead of risking a near-empty zone.
 
-### `powerdns_util.py` — PowerDNS HTTP API client
+### `PowerDnsClient` (`powerdns.py`)
 
-Thin wrappers around the PowerDNS authoritative HTTP API for the `hamip.at` zone:
+Object wrapper around the PowerDNS authoritative HTTP API for one zone:
 
-- `get_zone()` / `get_zones()` — fetch zone metadata / locate the zone id.
-- `get_current_zone()` — return the live zone as a dict of `Resource_record`,
-  keeping only `A`, `CNAME` and `TXT` records (so infrastructure records such as
-  SOA/NS are left untouched).
-- `request_patch()` — send an rrset PATCH (REPLACE/DELETE) and verify the
-  expected status code.
-- `update_serial()` — PUT `soa_edit_api = INCREASE` to bump the serial.
+- `fetch_zone()` — return the raw zone document (metadata + rrsets).
+- `parse_records(zone)` — extract the managed records (`A`, `CNAME`, `TXT`) from a
+  zone document, leaving infrastructure records such as SOA/NS untouched.
+- `fetch_records()` — `parse_records(fetch_zone())` convenience.
+- `replace_records()` / `delete_records()` — apply REPLACE/DELETE rrset patches in
+  chunks (`chunk_size`, default 500).
+- `increase_serial()` — PUT `soa_edit_api = INCREASE` to bump the serial.
 
-### `get_dns_zone_util.py` — zone reader (utility)
+Unexpected API responses raise `PowerDnsError`.
 
-Performs an AXFR zone transfer with `dnspython` and returns/prints all records as
-`(name, ttl, class, type, value)` tuples. Useful for inspecting/verifying a live
-zone. Requires `dnspython`.
+### `ZoneUpdater` (`updater.py`)
 
-### `pubip_util.py` — public-IP name parser (prototype)
+Given a `PowerDnsClient` (or any compatible object) and a desired `RecordMap`,
+`sync(reference)` fetches the live zone once, validates it has a serial and is
+non-empty, computes the removals and changes, applies deletes then
+changes/additions, and bumps the serial. Returns the `(to_remove, to_change)`
+maps it applied.
 
-Prototype to embed a public Internet IP in a HamnetDB name. A name of the form
-`185-236-164-044-inetip.wx.oe3gwu.hamip.at.` is parsed into the IP
-`185.236.164.44` and domain `wx.oe3gwu.hamip.at.`, the intent being to create the
-corresponding A record. Not yet wired into `update.py`.
+### `cli.py`
+
+`run()` builds the HamnetDB record set once, loads the static records, then for
+each `Target` reads its API key, assembles the reference set
+(`hamnetdb | static | timestamp`), and calls `ZoneUpdater(client).sync(...)`.
+`main()` configures logging and calls `run()`.
 
 ## Configuration / runtime inputs
+
+Defaults live in `hamipat/config.py`:
 
 - `/etc/hamip/key.asc` — PowerDNS API key for the ISP (public) instance.
 - `/etc/hamip/key_hamnet.asc` — PowerDNS API key for the local HamNet instance.
 - `/etc/hamip/static_records.yaml` — locally maintained records, with top-level
-  `isp:` and `hamnet:` mappings; each entry has `type`, `content`, `ttl`.
+  `isp:` and `hamnet:` mappings; each entry has `type`, `content`, `ttl`. See
+  `hamipat/static_records-example.yaml` for the format.
+
+## Running
+
+After `pip install .` (or `pip install -e .`):
+
+```
+hamip-update          # console-script entry point
+python -m hamipat     # equivalent
+```
 
 ## Tests
 
 Unit tests live in `tests/` and use the standard-library `unittest` framework
-(no extra dependencies). They are self-contained — all HamnetDB HTTP calls are
-mocked, so the suite runs offline.
+(no extra dependencies). They are self-contained — all HTTP access is faked via
+injected sessions / fake clients, so the suite runs offline.
 
 Run them from the repository root:
 
@@ -117,15 +141,16 @@ Run them from the repository root:
 python -m unittest discover -s tests -v
 ```
 
-`tests/conftest.py` adds the `hamip.at/` directory to `sys.path` so the
-non-package modules can be imported.
+`tests/conftest.py` puts the repository root on `sys.path` so the `hamipat`
+package can be imported in place.
 
-- `tests/test_pubip_util.py` — covers `extract_ip_and_domain`: zero-padded and
-  non-padded octets, out-of-range octets, the all-zeros / max-value boundaries,
-  and non-matching input.
-- `tests/test_hamnetdb_util.py` — covers the record-building logic of
-  `get_hamnetdb_hosts` (A records, alias CNAMEs, the per-site CNAME target
-  selection, `oe0any` special hosts, deleted-entry and non-Austrian filtering)
-  and the DHCP range expansion in `get_hamnetdb_dhcp`, with `requests.get`
-  patched to return canned payloads.
-
+- `tests/test_pubip.py` — `extract_ip_and_domain`: zero-padded and non-padded
+  octets, out-of-range octets, the all-zeros / max-value boundaries, no match.
+- `tests/test_hamnetdb.py` — `HamnetDbClient.fetch_hosts` (A records, alias
+  CNAMEs, per-site CNAME target selection, `oe0any` special hosts, deleted-entry
+  and non-Austrian filtering) and `fetch_dhcp` range expansion, with a fake
+  session.
+- `tests/test_powerdns.py` — `PowerDnsClient.parse_records` type filtering and the
+  REPLACE/DELETE patch payload format and chunking, with a recording session.
+- `tests/test_updater.py` — `ZoneUpdater.sync` diff logic (removals/changes,
+  serial bump) and its error guards, with a fake client.

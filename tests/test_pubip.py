@@ -1,23 +1,21 @@
-"""Unit tests for pubip_util.extract_ip_and_domain."""
+"""Unit tests for hamipat.pubip.extract_ip_and_domain."""
 import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hamip.at"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pubip_util import extract_ip_and_domain  # noqa: E402
+from hamipat.pubip import extract_ip_and_domain  # noqa: E402
 
 
 class TestExtractIpAndDomain(unittest.TestCase):
 
     def test_zero_padded_octets_are_normalized(self):
-        # Leading zeros must be stripped to form a canonical address.
         ip, domain = extract_ip_and_domain("185-236-164-044-inetip.wx.oe3gwu.hamip.at.")
         self.assertEqual(ip, "185.236.164.44")
         self.assertEqual(domain, "wx.oe3gwu.hamip.at.")
 
     def test_non_padded_octets(self):
-        # Octets shorter than three digits must also match.
         ip, domain = extract_ip_and_domain("44-143-0-7-inetip.wx.oe3gwu.hamip.at.")
         self.assertEqual(ip, "44.143.0.7")
         self.assertEqual(domain, "wx.oe3gwu.hamip.at.")
